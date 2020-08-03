@@ -189,7 +189,11 @@ class CallInliner(ast.NodeTransformer):
     def __init__(self, context: dict):
         self.context = context
         self.current_block = None
-        self.all_skip_names = set(gtscript.builtins | {"gt4py", "gtscript"})
+        self.all_skip_names = set(
+            gtscript.builtins
+            | {"gt4py", "gtscript"}
+            | set(gt_ir.NativeFunction.IR_OP_TO_PYTHON_SYMBOL.values())
+        )
 
     def __call__(self, func_node: ast.FunctionDef):
         self.visit(func_node)
@@ -227,7 +231,10 @@ class CallInliner(ast.NodeTransformer):
         return node
 
     def visit_Assign(self, node: ast.Assign):
-        if isinstance(node.value, ast.Call):
+        if (
+            isinstance(node.value, ast.Call)
+            and node.value.func.id not in gt_ir.NativeFunction.IR_OP_TO_PYTHON_SYMBOL.values()
+        ):
             assert len(node.targets) == 1
             self.visit(node.value, target_node=node.targets[0])
             # This node can be now removed since the trivial assignment has been already done
@@ -238,7 +245,13 @@ class CallInliner(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call, *, target_node=None):
         call_name = node.func.id
-        assert call_name in self.context and hasattr(self.context[call_name], "_gtscript_")
+
+        if call_name in gt_ir.NativeFunction.IR_OP_TO_PYTHON_SYMBOL.values():
+            node.args = [self.visit(arg) for arg in node.args]
+            return node
+
+        elif call_name not in self.context and not hasattr(self.context[call_name], "_gtscript_"):
+            raise GTScriptSyntaxError("Unknown call", loc=gt_ir.Location.from_ast_node(node))
 
         # Recursively inline any possible nested subroutine call
         call_info = self.context[call_name]._gtscript_
@@ -811,6 +824,28 @@ class IRMaker(ast.NodeVisitor):
 
         return result
 
+    def visit_Call(self, node: ast.Call):
+        func_id = node.func.id
+
+        symbol_to_enum = {
+            value: key for key, value in gt_ir.NativeFunction.IR_OP_TO_PYTHON_SYMBOL.items()
+        }
+
+        native_fcn = symbol_to_enum[func_id]
+
+        args = [self.visit(arg) for arg in node.args]
+        if len(args) != native_fcn.numargs:
+            raise GTScriptSyntaxError(
+                "Invalid native function call", loc=gt_ir.Location.from_ast_node(node)
+            )
+
+        return gt_ir.NativeFuncCall(
+            func=native_fcn,
+            args=args,
+            data_type=gt_ir.DataType.AUTO,
+            loc=gt_ir.Location.from_ast_node(node),
+        )
+
     # -- Statement nodes --
     def visit_Assign(self, node: ast.Assign) -> list:
         result = []
@@ -1087,9 +1122,11 @@ class GTScriptParser(ast.NodeVisitor):
 
         nonlocal_symbols = {}
 
+        builtins = gtscript.builtins | set(gt_ir.NativeFunction.IR_OP_TO_PYTHON_SYMBOL.values())
+
         name_nodes = gt_meta.collect_names(definition)
         for collected_name in name_nodes.keys():
-            if collected_name not in gtscript.builtins:
+            if collected_name not in builtins:
                 root_name = collected_name.split(".")[0]
                 if root_name in imported_symbols:
                     imported_symbols[root_name].setdefault(

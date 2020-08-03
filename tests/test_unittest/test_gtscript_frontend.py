@@ -76,6 +76,11 @@ def identity(field_in):
     return field_in
 
 
+@gtscript.function
+def sinus(field_in):
+    return sin(field_in)
+
+
 class TestInlinedExternals:
     def test_all_legal_combinations(self, id_version):
         module = f"TestInlinedExternals_test_module_{id_version}"
@@ -485,3 +490,41 @@ class TestAssignmentSyntax:
                 in_field -= 0.5
                 in_field /= 0.5
                 in_field *= 4.0
+
+
+class TestNativeFunctions:
+    def test_simple_call(self):
+        @gtscript.stencil(backend="debug")
+        def func(in_field: gtscript.Field[np.float_]):
+            with computation(PARALLEL), interval(...):
+                in_field += sin(in_field)
+
+    def test_offset_arg(self):
+        @gtscript.stencil(backend="debug")
+        def func(in_field: gtscript.Field[np.float_]):
+            with computation(PARALLEL), interval(...):
+                in_field += sin(in_field[1, 0, 0])
+
+    def test_nested_calls(self):
+        @gtscript.stencil(backend="debug")
+        def func(in_field: gtscript.Field[np.float_]):
+            with computation(PARALLEL), interval(...):
+                in_field += sin(abs(in_field))
+
+    def test_nested_external_call(self):
+        @gtscript.stencil(backend="debug")
+        def func(in_field: gtscript.Field[np.float_]):
+            with computation(PARALLEL), interval(...):
+                in_field += sin(add_external_const(in_field))
+
+    def test_multi_nested_calls(self):
+        @gtscript.stencil(backend="debug")
+        def func(in_field: gtscript.Field[np.float_]):
+            with computation(PARALLEL), interval(...):
+                in_field += min(abs(sin(add_external_const(in_field))), -0.5)
+
+    def test_native_in_function(self):
+        @gtscript.stencil(backend="debug")
+        def func(in_field: gtscript.Field[np.float_]):
+            with computation(PARALLEL), interval(...):
+                in_field += sinus(in_field)
