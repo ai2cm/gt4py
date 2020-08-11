@@ -32,6 +32,7 @@ from .passes import (
     InitInfoPass,
     MergeBlocksPass,
     NormalizeBlocksPass,
+    check_race_conditions,
 )
 
 
@@ -127,6 +128,8 @@ class IRTransformer:
             options.build_info["def_ir"] = self.transform_data.definition_ir
             options.build_info["iir"] = self.transform_data.implementation_ir
             options.build_info["symbol_info"] = self.transform_data.symbols
+
+        check_race_conditions(self.transform_data.implementation_ir)
 
         return self.transform_data.implementation_ir
 

@@ -20,6 +20,8 @@
 import itertools
 from typing import Optional, Set, Tuple, Union
 
+import networkx as nx
+
 from gt4py import definitions as gt_definitions
 from gt4py import ir as gt_ir
 from gt4py.analysis import (
@@ -1036,3 +1038,98 @@ class CleanUpPass(TransformPass):
         prune_emtpy_nodes(transform_data.implementation_ir)
 
         return transform_data
+
+
+class FieldDependencyGraphCreator(gt_ir.IRNodeVisitor):
+    @classmethod
+    def apply(cls, root_node):
+        return cls()(root_node)
+
+    def _reset_refs(self):
+        self.field_refs = {}
+        self.var_refs = []
+
+    def __init__(self):
+        self._reset_refs()
+
+    def __call__(self, node):
+        self.graph = nx.DiGraph()
+        self.visit(node)
+        return self.graph
+
+    def visit_FieldRef(self, node: gt_ir.FieldRef):
+        if node.name not in self.graph.nodes:
+            self.graph.add_node(node.name)
+
+        if node.name in self.field_refs:
+            self.field_refs[node.name].append(node.offset)
+        else:
+            self.field_refs[node.name] = [node.offset]
+
+    def visit_VarRef(self, node: gt_ir.VarRef):
+        if node.name not in self.graph.nodes:
+            self.graph.add_node(node.name)
+
+        self.var_refs.append(node.name)
+
+    def visit_Assign(self, node: gt_ir.Assign):
+        target_name = node.target.name
+
+        self._reset_refs()
+        self.visit(node.value)
+
+        for value_field, offsets in self.field_refs.items():
+            self.graph.add_edge(target_name, value_field, offsets=offsets)
+
+        for value_ref in self.var_refs:
+            self.graph.add_edge(target_name, value_ref)
+
+
+create_field_dependency_graph = FieldDependencyGraphCreator.apply
+
+
+def _check_graph_for_race(graph, fail_if, message):
+    for cycle in nx.simple_cycles(graph):
+        full_cycle = cycle + [cycle[0]]
+        for source, target in zip(full_cycle[:-1], full_cycle[1:]):
+            offsets = graph.get_edge_data(source, target).get("offsets", [])
+            if any([fail_if(offset) for offset in offsets]):
+                raise IRSpecificationError(f"{message}. Cycle: {','.join(full_cycle)}")
+
+
+class RaceConditionCheck(gt_ir.IRNodeVisitor):
+    @classmethod
+    def apply(cls, root_node):
+        return cls()(root_node)
+
+    def __init__(self):
+        self.iteration_order = None
+
+    def __call__(self, node):
+        self.visit(node)
+
+    def visit_MultiStage(self, node: gt_ir.MultiStage):
+        # Look for horizontal race conditions within stages
+        for group in node.groups:
+            self.visit(group)
+
+        # Look for vertical race conditions
+        iteration_order = node.iteration_order
+        if iteration_order != gt_ir.IterationOrder.PARALLEL:
+            return
+
+        graph = create_field_dependency_graph(node)
+        _check_graph_for_race(
+            graph, lambda offset: offset["K"] != 0, "Vertical race condition detected"
+        )
+
+    def visit_Stage(self, node: gt_ir.Stage):
+        graph = create_field_dependency_graph(node)
+        _check_graph_for_race(
+            graph,
+            lambda offset: offset["I"] != 0 or offset["J"] != 0,
+            "Horizontal race condition detected",
+        )
+
+
+check_race_conditions = RaceConditionCheck.apply

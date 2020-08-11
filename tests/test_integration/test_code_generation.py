@@ -97,3 +97,38 @@ def test_stage_without_effect(backend):
     def definition(field_a: gtscript.Field[np.float_]):
         with computation(PARALLEL), interval(...):
             field_c = 0.0
+
+
+def test_race_conditions():
+
+    from gt4py.analysis.passes import IRSpecificationError
+
+    with pytest.raises(IRSpecificationError, match="Horizontal race condition"):
+
+        @gtscript.stencil(backend="debug")
+        def func(in_field: gtscript.Field[np.float_], out_field: gtscript.Field[np.float_]):
+            with computation(PARALLEL), interval(...):
+                out_field = in_field + out_field[1, 0, 0]
+
+    with pytest.raises(IRSpecificationError, match="Horizontal race condition"):
+
+        @gtscript.stencil(backend="debug")
+        def func(
+            in_field: gtscript.Field[np.float_],
+            out_field: gtscript.Field[np.float_],
+            *,
+            flag: np.int32,
+        ):
+            with computation(PARALLEL), interval(...):
+                tmp = 1
+                if flag:
+                    tmp = in_field + out_field[1, 0, 0]
+                    out_field = tmp
+
+    with pytest.raises(IRSpecificationError, match="Vertical race condition"):
+
+        @gtscript.stencil(backend="debug")
+        def func(field_a: gtscript.Field[np.float_]):
+            with computation(PARALLEL), interval(...):
+                tmp = field_a[0, 0, 1]
+                field_a = tmp
