@@ -4,7 +4,7 @@
 # The idea of this script is to keep the amount of code in the "Execute shell" field small
 #
 # Example syntax:
-# .jenkins/jenkins.sh run_regression_tests
+# .jenkins/jenkins.sh run_tests
 #
 # Other actions such as test/build/deploy can be defined.
 
@@ -72,8 +72,8 @@ fi
 # check if action script exists
 script="${root}/actions/${action}.sh"
 test -f "${script}" || exitError 1301 ${LINENO} "cannot find script ${script}"
-
-${script} ${envloc} ${optarg}
+cmd="${root}/actions/${action}.txt"
+${script} ${envloc} ${cmd}
 if [ $? -ne 0 ] ; then
   exitError 1510 ${LINENO} "problem while executing script ${script}"
 fi
