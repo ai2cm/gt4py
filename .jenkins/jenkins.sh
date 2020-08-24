@@ -72,7 +72,7 @@ fi
 # check if action script exists
 script="${root}/actions/${action}.sh"
 test -f "${script}" || exitError 1301 ${LINENO} "cannot find script ${script}"
-cmd="${root}/actions/${action}.txt"
+cmd="${root}/actions/${action}_cmd.txt"
 ${script} ${envloc} ${cmd}
 if [ $? -ne 0 ] ; then
   exitError 1510 ${LINENO} "problem while executing script ${script}"
