@@ -35,7 +35,7 @@ from .stencil_definitions import REGISTRY as stencil_definitions
 def test_generation_cpu(name, backend):
     stencil_definition = stencil_definitions[name]
     externals = externals_registry[name]
-    stencil = gtscript.stencil(backend, stencil_definition, externals=externals)
+    stencil = gtscript.stencil(backend, stencil_definition, externals=externals, rebuild=True)
     args = {}
     for k, v in stencil_definition.__annotations__.items():
         if isinstance(v, gtscript._FieldDescriptor):
@@ -98,37 +98,25 @@ def test_stage_without_effect(backend):
         with computation(PARALLEL), interval(...):
             field_c = 0.0
 
+def test_ignore_np_errstate():
+    def setup_and_run(backend, **kwargs):
+        field_a = gt_storage.zeros(
+            dtype=np.float_, backend=backend, shape=(3, 3, 1), default_origin=(0, 0, 0),
+        )
 
-def test_race_conditions():
-
-    from gt4py.analysis.passes import IRSpecificationError
-
-    with pytest.raises(IRSpecificationError, match="Horizontal race condition"):
-
-        @gtscript.stencil(backend="debug")
-        def func(in_field: gtscript.Field[np.float_], out_field: gtscript.Field[np.float_]):
+        @gtscript.stencil(backend=backend, **kwargs)
+        def divide_by_zero(field_a: gtscript.Field[np.float_]):
             with computation(PARALLEL), interval(...):
-                out_field = in_field + out_field[1, 0, 0]
+                field_a = 1.0 / field_a
 
-    with pytest.raises(IRSpecificationError, match="Horizontal race condition"):
+        divide_by_zero(field_a)
 
-        @gtscript.stencil(backend="debug")
-        def func(
-            in_field: gtscript.Field[np.float_],
-            out_field: gtscript.Field[np.float_],
-            *,
-            flag: np.int32,
-        ):
-            with computation(PARALLEL), interval(...):
-                tmp = 1
-                if flag:
-                    tmp = in_field + out_field[1, 0, 0]
-                    out_field = tmp
+    # Usual behavior: with the numpy backend there is no error
+    setup_and_run(backend="numpy")
 
-    with pytest.raises(IRSpecificationError, match="Vertical race condition"):
+    # Expect warning with debug or numpy + ignore_np_errstate=False
+    with pytest.warns(RuntimeWarning, match="divide by zero encountered"):
+        setup_and_run(backend="debug")
 
-        @gtscript.stencil(backend="debug")
-        def func(field_a: gtscript.Field[np.float_]):
-            with computation(PARALLEL), interval(...):
-                tmp = field_a[0, 0, 1]
-                field_a = tmp
+    with pytest.warns(RuntimeWarning, match="divide by zero encountered"):
+        setup_and_run(backend="numpy", ignore_np_errstate=False)

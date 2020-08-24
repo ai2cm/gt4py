@@ -127,6 +127,7 @@ class StencilObject(abc.ABC):
             origin: `{'field_name': [int * ndims]}`
                 The origin for each field.
 
+
         Returns
         -------
             `Shape`: the maximum domain size.
@@ -223,14 +224,20 @@ class StencilObject(abc.ABC):
                 )
 
     def _call_run(
-        self, field_args, parameter_args, domain, origin, *, validate_args=True, exec_info=None
+        self,
+        field_args,
+        parameter_args,
+        domain,
+        origin,
+        *,
+        splitters=None,
+        validate_args=True,
+        exec_info=None,
     ):
         """Check and preprocess the provided arguments (called by :class:`StencilObject` subclasses).
 
         Note that this function will always try to expand simple parameter values to
         complete data structures by repeating the same value as many times as needed.
-
-        See _validate_args for a list of exceptions raised by this method.
 
         Parameters
         ----------
@@ -249,10 +256,10 @@ class StencilObject(abc.ABC):
                 largest feasible domain according to the provided input fields
                 and origin values (`None` by default).
 
-            origin :  `[int * ndims]` or `{'field_name': [int * ndims]}`, optional
+            origin :  `[int * ndims]` or {'field_name': [int * ndims]} , optional
                 If a single offset is passed, it will be used for all fields.
                 If a `dict` is passed, there could be an entry for each field.
-                A special key *'_all_'* will represent the value to be used for all
+                A special key '_all_' will represent the value to be used for all
                 the fields not explicitly defined. If `None` is passed or it is
                 not possible to assign a value to some field according to the
                 previous rule, the value will be inferred from the global boundaries
@@ -260,6 +267,10 @@ class StencilObject(abc.ABC):
                 are at least equal to the `global_border` attribute of that field,
                 so a 0-based origin will only be acceptable for fields with
                 a 0-area support region.
+
+            splitters : `dict`, optional
+                Dictionary that gives integer values to each splitter variable.
+                (`None` by default).
 
             validate_args : `bool`
                 If True, ensures all input arguments are valid for the stencil run.
@@ -271,6 +282,11 @@ class StencilObject(abc.ABC):
         Returns
         -------
             `None`
+
+        Raises
+        -------
+            ValueError
+                If invalid data or inconsistent options are specified.
         """
 
         if exec_info is not None:
@@ -295,6 +311,12 @@ class StencilObject(abc.ABC):
             if parameter_info is not None and used_param_args[name] is None:
                 raise ValueError(f"Parameter '{name}' is None.")
 
+        # Filter splitters that are used
+        if splitters is not None:
+            stencil_splitters = {var: splitters[var] for var in self.splitters}
+        else:
+            stencil_splitters = dict()
+
         # Origins
         if origin is None:
             origin = {}
@@ -314,7 +336,12 @@ class StencilObject(abc.ABC):
             self._validate_args(used_field_args, used_param_args, domain, origin)
 
         self.run(
-            _domain_=domain, _origin_=origin, exec_info=exec_info, **field_args, **parameter_args
+            _domain_=domain,
+            _origin_=origin,
+            exec_info=exec_info,
+            **field_args,
+            **parameter_args,
+            **stencil_splitters,
         )
 
         if exec_info is not None:

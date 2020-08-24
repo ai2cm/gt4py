@@ -179,7 +179,7 @@ class PythonSourceGenerator(gt_ir.IRNodeVisitor):
 
     def visit_NativeFuncCall(self, node: gt_ir.NativeFuncCall):
         call = self.NATIVE_FUNC_TO_PYTHON[node.func]
-        args = ",".join([self.visit(arg) for arg in node.args])
+        args = ",".join(self.visit(arg) for arg in node.args)
         return f"{call}({args})"
 
     def visit_TernaryOpExpr(self, node: gt_ir.TernaryOpExpr):
@@ -242,10 +242,11 @@ class PythonSourceGenerator(gt_ir.IRNodeVisitor):
     def visit_ApplyBlock(self, node: gt_ir.ApplyBlock):
         interval_definition = self.visit(node.interval)
         self.block_info.interval = interval_definition
+        self.block_info.parallel_interval = node.parallel_interval
         self.block_info.symbols = node.local_symbols
         body_sources = self.visit(node.body)
 
-        return interval_definition, body_sources
+        return interval_definition, self.block_info.parallel_interval, body_sources
 
     def visit_Stage(self, node: gt_ir.Stage, *, iteration_order):
         # Initialize symbols for the generation of references in this stage

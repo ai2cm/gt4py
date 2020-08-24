@@ -14,6 +14,9 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import textwrap
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from gt4py import backend as gt_backend
@@ -22,6 +25,10 @@ from gt4py import ir as gt_ir
 from gt4py.utils import text as gt_text
 
 from .python_generator import PythonSourceGenerator
+
+
+if TYPE_CHECKING:
+    from gt4py.stencil_builder import StencilBuilder
 
 
 class NumPySourceGenerator(PythonSourceGenerator):
@@ -115,9 +122,15 @@ class NumPySourceGenerator(PythonSourceGenerator):
         if iteration_order == gt_ir.IterationOrder.BACKWARD:
             regions = reversed(regions)
 
-        for bounds, body in regions:
+        for bounds, parallel_interval, body in regions:
             region_lines = self._make_regional_computation(iteration_order, bounds, body)
-            source_lines.extend(region_lines)
+            parallel_bounds = getattr(self.block_info, "parallel_bounds", None)
+            if parallel_bounds:
+                bound_strs = [" < ".join(a) for a in parallel_bounds]
+                source_lines.append(f"if {' and '.join(bound_strs)}:")
+                source_lines.extend([(" " * self.indent_size) + line for line in region_lines])
+            else:
+                source_lines.extend(region_lines)
 
         return source_lines
 
@@ -127,6 +140,7 @@ class NumPySourceGenerator(PythonSourceGenerator):
 
         is_parallel = self.block_info.iteration_order == gt_ir.IterationOrder.PARALLEL
         extent = self.block_info.extent
+
         lower_extent = list(extent.lower_indices)
         upper_extent = list(extent.upper_indices)
 
@@ -137,19 +151,47 @@ class NumPySourceGenerator(PythonSourceGenerator):
                 upper_extent[d] += idx
 
         index = []
+        self.block_info.parallel_bounds = []
         for d in range(2):
             start_expr = " {:+d}".format(lower_extent[d]) if lower_extent[d] != 0 else ""
             size_expr = "{dom}[{d}]".format(dom=self.domain_arg_name, d=d)
             size_expr += " {:+d}".format(upper_extent[d]) if upper_extent[d] != 0 else ""
-            index.append(
-                "{name}{marker}[{d}]{start}: {name}{marker}[{d}] + {size}".format(
-                    name=node.name,
-                    start=start_expr,
-                    marker=self.origin_marker,
-                    d=d,
-                    size=size_expr,
-                )
-            )
+
+            lower_index = f"{node.name}{self.origin_marker}[{d}]{start_expr}"
+            upper_index = f"{node.name}{self.origin_marker}[{d}] + {size_expr}"
+
+            if not self.block_info.parallel_interval:
+                index.append(f"{lower_index}: {upper_index}")
+            else:
+                axis_interval = self.block_info.parallel_interval[d]
+                bounds = []
+
+                operators = ("max", "min")
+                for regular_bound, axis_bound, operator in zip(
+                    (lower_index, upper_index), (axis_interval.start, axis_interval.end), operators
+                ):
+                    if isinstance(axis_bound.level, gt_ir.VarRef):
+                        this_bound = f"{axis_bound.level.name}{axis_bound.offset:+d}"
+                    elif isinstance(axis_bound.level, int):
+                        this_bound = f"{axis_bound.level}{axis_bound.offset:+d}"
+                    else:
+                        this_bound = ""
+
+                    if this_bound:
+                        bounds.append(f"{operator}({regular_bound}, {this_bound})")
+                    else:
+                        bounds.append(f"{regular_bound}")
+                index.append(" : ".join(bounds))
+                # TODO need this for both axes
+                self.block_info.parallel_bounds.append(bounds)
+        # for interval, axis_name in zip(parallel_definition, par_axis_names):
+        #     for axis_bound in (interval.start, interval.end):
+        #         if isinstance(axis_bound.level, gt_ir.VarRef):
+        #             conditions.append(
+        #                 f"{axis_name} >= {axis_bound.level.name} + {axis_bound.offset}"
+        #             )
+        #         elif isinstance(axis_bound.level, int):
+        #             conditions.append(f"{axis_name} >= {axis_bound.level} + {axis_bound.offset}")
 
         k_ax = self.domain.sequential_axis.name
         k_offset = node.offset.get(k_ax, 0)
@@ -306,8 +348,8 @@ class NumPySourceGenerator(PythonSourceGenerator):
 
 
 class NumPyModuleGenerator(gt_backend.BaseModuleGenerator):
-    def __init__(self, backend_class):
-        super().__init__(backend_class)
+    def __init__(self, builder: "StencilBuilder"):
+        super().__init__(builder)
         self.source_generator = NumPySourceGenerator(
             indent_size=self.TEMPLATE_INDENT_SIZE,
             origin_marker="__O",
@@ -341,10 +383,14 @@ def vectorized_ternary_op(*, condition, then_expr, else_expr, dtype):
         return source
 
     def generate_implementation(self):
-        sources = gt_text.TextBlock(indent_size=self.TEMPLATE_INDENT_SIZE)
-        self.source_generator(self.implementation_ir, sources)
-
-        return sources.text
+        block = gt_text.TextBlock(indent_size=self.TEMPLATE_INDENT_SIZE)
+        self.source_generator(self.implementation_ir, block)
+        if self.options.backend_opts.get("ignore_np_errstate", True):
+            source = "with np.errstate(divide='ignore', over='ignore', under='ignore', invalid='ignore'):\n"
+            source += textwrap.indent(block.text, " " * self.TEMPLATE_INDENT_SIZE)
+        else:
+            source = block.text
+        return source
 
 
 def numpy_layout(mask):
@@ -363,10 +409,17 @@ def numpy_is_compatible_type(field):
 
 @gt_backend.register
 class NumPyBackend(gt_backend.BaseBackend, gt_backend.PurePythonBackendCLIMixin):
-    """Pure Python backend using numpy for faster computations than the debug backend."""
+    """Pure Python backend using NumPy for faster computations than the debug backend.
+
+    Other Parameters
+    ----------------
+    Backend options include:
+    - ignore_np_errstate: `bool`
+        If False, does not ignore NumPy floating-point errors. (`True` by default.)
+    """
 
     name = "numpy"
-    options = {}
+    options = {"ignore_np_errstate": {"versioning": True}}
     storage_info = {
         "alignment": 1,
         "device": "cpu",
@@ -374,6 +427,7 @@ class NumPyBackend(gt_backend.BaseBackend, gt_backend.PurePythonBackendCLIMixin)
         "is_compatible_layout": numpy_is_compatible_layout,
         "is_compatible_type": numpy_is_compatible_type,
     }
+
     languages = {"computation": "python", "bindings": []}
 
     MODULE_GENERATOR_CLASS = NumPyModuleGenerator

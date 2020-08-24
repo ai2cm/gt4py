@@ -21,6 +21,7 @@ import inspect
 import itertools
 import numbers
 import types
+from typing import List
 
 import numpy as np
 
@@ -181,6 +182,12 @@ class ReturnReplacer(ast.NodeTransformer):
 
 
 class CallInliner(ast.NodeTransformer):
+    """Inlines calls to gtscript.function calls.
+
+    Calls to NativeFunctions (intrinsic math functions) are kept in the IR and
+    dealt with in the IRMaker.
+    """
+
     @classmethod
     def apply(cls, func_node: ast.FunctionDef, context: dict):
         inliner = cls(context)
@@ -232,10 +239,7 @@ class CallInliner(ast.NodeTransformer):
         return node
 
     def visit_Assign(self, node: ast.Assign):
-        if (
-            isinstance(node.value, ast.Call)
-            and node.value.func.id not in gt_ir.NativeFunction.IR_OP_TO_PYTHON_SYMBOL.values()
-        ):
+        if isinstance(node.value, ast.Call) and node.value.func.id not in gtscript.MATH_BUILTINS:
             assert len(node.targets) == 1
             self.visit(node.value, target_node=node.targets[0])
             # This node can be now removed since the trivial assignment has been already done
@@ -247,7 +251,7 @@ class CallInliner(ast.NodeTransformer):
     def visit_Call(self, node: ast.Call, *, target_node=None):
         call_name = node.func.id
 
-        if call_name in gt_ir.NativeFunction.IR_OP_TO_PYTHON_SYMBOL.values():
+        if call_name in gtscript.MATH_BUILTINS:
             node.args = [self.visit(arg) for arg in node.args]
             return node
 
@@ -412,6 +416,79 @@ class CompiledIfInliner(ast.NodeTransformer):
         return node if node else None
 
 
+class RegionExtractor(ast.NodeVisitor):
+    @classmethod
+    def apply(cls, node, splitters):
+        assert isinstance(node, ast.Call)
+        return cls(splitters).visit(node)
+
+    def __init__(self, splitters):
+        self.splitters = splitters
+
+    def visit_Name(self, node: ast.Name):
+        if node.id not in self.splitters:
+            raise GTScriptSyntaxError(
+                f"{node.id} is not a defined splitter", loc=gt_ir.Location.from_ast_node(node)
+            )
+        return (gt_ir.VarRef(name=node.id), 0)
+
+    def visit_Constant(self, node: ast.Constant):
+        return (None, int(node.value))
+
+    def visit_Num(self, node: ast.Num):
+        return (None, int(node.n))
+
+    def visit_BinOp(self, node: ast.BinOp):
+        left_level, left_offset = self.visit(node.left)
+        right_level, right_offset = self.visit(node.right)
+
+        if left_level and right_level and left_level != right_level:
+            raise GTScriptSyntaxError("Cannot only use one splitter in each slice expression")
+
+        level = left_level if left_level else right_level
+
+        if isinstance(node.op, ast.Add):
+            offset = left_offset + right_offset
+        elif isinstance(node.op, ast.Sub):
+            offset = left_offset - right_offset
+        else:
+            raise GTScriptSyntaxError(
+                "Only addition and subtraction are allowed operators on splitter values",
+                loc=gt_ir.Location.from_ast_node(node),
+            )
+
+        return (level, offset)
+
+    def visit_Subscript(self, node: ast.Subscript):
+        # Some variance in Python 3.9+ vs older ASDL language nodes
+        slice_tuple = node.slice if isinstance(node.slice, tuple) else node.slice.dims
+
+        parallel_interval = []
+        for axis_slice in slice_tuple:
+            if axis_slice.lower is None:
+                offset = 0
+                level = gt_ir.LevelMarker.START
+            else:
+                level, offset = self.visit(axis_slice.lower)
+            lower = gt_ir.AxisBound(level=level, offset=offset)
+
+            if axis_slice.upper is None:
+                offset = 0
+                level = gt_ir.LevelMarker.END
+            else:
+                level, offset = self.visit(axis_slice.upper)
+            upper = gt_ir.AxisBound(level=level, offset=offset)
+
+            parallel_interval.append(
+                gt_ir.AxisInterval(start=lower, end=upper, loc=gt_ir.Location.from_ast_node(node))
+            )
+        return parallel_interval
+
+    def visit_Call(self, node: ast.Call) -> list:
+        """Top-level call for the RegionExtractor."""
+        return [self.visit(arg) for arg in node.args]
+
+
 #
 # class Cleaner(gt_ir.IRNodeVisitor):
 #     @classmethod
@@ -464,13 +541,6 @@ class CompiledIfInliner(ast.NodeTransformer):
 #
 
 
-@enum.unique
-class ParsingContext(enum.Enum):
-    CONTROL_FLOW = 1
-    COMPUTATION = 2
-    INTERVAL = 3
-
-
 class IRMaker(ast.NodeVisitor):
     def __init__(
         self,
@@ -480,6 +550,7 @@ class IRMaker(ast.NodeVisitor):
         *,
         domain: gt_ir.Domain,
         extra_temp_decls: dict,
+        splitters: set = None,
     ):
         fields = fields or {}
         parameters = parameters or {}
@@ -494,8 +565,30 @@ class IRMaker(ast.NodeVisitor):
         self.local_symbols = local_symbols
         self.domain = domain or gt_ir.Domain.LatLonGrid()
         self.extra_temp_decls = extra_temp_decls or {}
+        self.splitters = splitters or {}
         self.parsing_context = None
         self.in_if = False
+        gt_ir.NativeFunction.PYTHON_SYMBOL_TO_IR_OP = {
+            "abs": gt_ir.NativeFunction.ABS,
+            "min": gt_ir.NativeFunction.MIN,
+            "max": gt_ir.NativeFunction.MAX,
+            "mod": gt_ir.NativeFunction.MOD,
+            "sin": gt_ir.NativeFunction.SIN,
+            "cos": gt_ir.NativeFunction.COS,
+            "tan": gt_ir.NativeFunction.TAN,
+            "asin": gt_ir.NativeFunction.ARCSIN,
+            "acos": gt_ir.NativeFunction.ARCCOS,
+            "atan": gt_ir.NativeFunction.ARCTAN,
+            "sqrt": gt_ir.NativeFunction.SQRT,
+            "exp": gt_ir.NativeFunction.EXP,
+            "log": gt_ir.NativeFunction.LOG,
+            "isfinite": gt_ir.NativeFunction.ISFINITE,
+            "isinf": gt_ir.NativeFunction.ISINF,
+            "isnan": gt_ir.NativeFunction.ISNAN,
+            "floor": gt_ir.NativeFunction.FLOOR,
+            "ceil": gt_ir.NativeFunction.CEIL,
+            "trunc": gt_ir.NativeFunction.TRUNC,
+        }
 
     def __call__(self, ast_root: ast.AST):
         assert (
@@ -505,7 +598,6 @@ class IRMaker(ast.NodeVisitor):
             and isinstance(ast_root.body[0], ast.FunctionDef)
         )
         func_ast = ast_root.body[0]
-        self.parsing_context = ParsingContext.CONTROL_FLOW
         computations = self.visit(func_ast)
 
         return computations
@@ -542,20 +634,16 @@ class IRMaker(ast.NodeVisitor):
         key += start.offset
         return key
 
-    def _visit_computation_node(self, node: ast.With) -> list:
-        loc = gt_ir.Location.from_ast_node(node)
-        syntax_error = GTScriptSyntaxError(
-            f"Invalid 'computation' specification at line {loc.line} (column {loc.column})",
-            loc=loc,
-        )
-
-        comp_node = node.items[0].context_expr
+    def _visit_iteration_order_node(self, node: ast.withitem, loc: gt_ir.Location):
+        comp_node = node.context_expr
         if len(comp_node.args) + len(comp_node.keywords) != 1 or any(
             keyword.arg not in ["order"] for keyword in comp_node.keywords
         ):
-            raise syntax_error
+            raise GTScriptSyntaxError(
+                f"Invalid 'computation' specification at line {loc.line} (column {loc.column})",
+                loc=loc,
+            )
 
-        # Iteration order
         if comp_node.args:
             iteration_order_node = comp_node.args[0]
         else:
@@ -565,42 +653,22 @@ class IRMaker(ast.NodeVisitor):
             or iteration_order_node.id not in gt_ir.IterationOrder.__members__
         ):
             raise syntax_error
-        iteration_order = gt_ir.IterationOrder[iteration_order_node.id]
 
-        # Body
-        body = list(node.body)
-        if len(node.items) == 2:
-            nested_with_stmt = copy.deepcopy(node)
-            nested_with_stmt.items = [node.items[1]]
-            nested_with_stmt.body = body
-            body = [nested_with_stmt]
-        elif len(node.items) > 2:
-            raise syntax_error
+        return gt_ir.IterationOrder[iteration_order_node.id]
 
-        self.parsing_context = ParsingContext.COMPUTATION
-        result = []
-        for item in body:
-            block = self.visit(item)
-            assert isinstance(block, gt_ir.ComputationBlock)
-            block.iteration_order = iteration_order
-            result.append(block)
-        self.parsing_context = ParsingContext.CONTROL_FLOW
-
-        if len(result) > 1:
-            # Vertical regions with variable references are not supported yet
-            result.sort(key=self._sort_blocks_key)
-            if iteration_order == gt_ir.IterationOrder.BACKWARD:
-                result.reverse()
-
-        return result
-
-    def _visit_interval_node(self, node: ast.With) -> gt_ir.ComputationBlock:
-        loc = gt_ir.Location.from_ast_node(node)
+    def _visit_interval_node(self, node: ast.withitem, loc: gt_ir.Location):
+        # initialize possible exceptions
         interval_error = GTScriptSyntaxError(
             f"Invalid 'interval' specification at line {loc.line} (column {loc.column})", loc=loc
         )
+        range_error = GTScriptSyntaxError(
+            f"Invalid interval range specification at line {loc.line} (column {loc.column})",
+            loc=loc,
+        )
 
-        interval_node = node.items[0].context_expr
+        interval_node = node.context_expr
+
+        # validate interval specification
         if (
             (len(interval_node.args) + len(interval_node.keywords) < 1)
             or (len(interval_node.args) + len(interval_node.keywords) > 2)
@@ -608,11 +676,7 @@ class IRMaker(ast.NodeVisitor):
         ):
             raise interval_error
 
-        loc = gt_ir.Location.from_ast_node(node)
-        range_error = GTScriptSyntaxError(
-            f"Invalid interval range specification at line {loc.line} (column {loc.column})",
-            loc=loc,
-        )
+        # parse interval
         if interval_node.args:
             range_node = interval_node.args
         else:
@@ -630,19 +694,62 @@ class IRMaker(ast.NodeVisitor):
         else:
             raise range_error
 
-        self.parsing_context = ParsingContext.INTERVAL
+        return interval
+
+    def _visit_computation_node(self, node: ast.With) -> list:
+        loc = gt_ir.Location.from_ast_node(node)
+        syntax_error = GTScriptSyntaxError(
+            f"Invalid 'computation' specification at line {loc.line} (column {loc.column})",
+            loc=loc,
+        )
+
+        # Parse computation specification, i.e. `withItems` nodes
+        iteration_order = None
+        interval = None
+        parallel_intervals = [None]
+
+        try:
+            for item in node.items:
+                if (
+                    isinstance(item.context_expr, ast.Call)
+                    and item.context_expr.func.id == "computation"
+                ):
+                    assert iteration_order is None  # only one spec allowed
+                    iteration_order = self._visit_iteration_order_node(item, loc)
+                elif (
+                    isinstance(item.context_expr, ast.Call)
+                    and item.context_expr.func.id == "interval"
+                ):
+                    assert interval is None  # only one spec allowed
+                    interval = self._visit_interval_node(item, loc)
+                elif (
+                    isinstance(item.context_expr, ast.Call)
+                    and item.context_expr.func.id == "parallel"
+                ):
+                    assert parallel_intervals == [None]
+                    parallel_intervals = RegionExtractor.apply(item.context_expr, self.splitters)
+                else:
+                    raise syntax_error
+        except AssertionError as e:
+            raise syntax_error from e
+
+        if iteration_order is None or interval is None:
+            raise syntax_error
+
+        #  Parse `With` body into computation blocks
         stmts = []
         for stmt in node.body:
             stmts.extend(gt_utils.listify(self.visit(stmt)))
-        self.parsing_context = ParsingContext.COMPUTATION
 
-        result = gt_ir.ComputationBlock(
-            interval=interval,
-            iteration_order=gt_ir.IterationOrder.PARALLEL,
-            body=gt_ir.BlockStmt(stmts=stmts),
-        )
-
-        return result
+        return [
+            gt_ir.ComputationBlock(
+                interval=interval,
+                iteration_order=iteration_order,
+                parallel_interval=parallel_interval,
+                body=gt_ir.BlockStmt(stmts=stmts),
+            )
+            for parallel_interval in parallel_intervals
+        ]
 
     # Visitor methods
     # -- Special nodes --
@@ -826,16 +933,10 @@ class IRMaker(ast.NodeVisitor):
         return result
 
     def visit_Call(self, node: ast.Call):
-        func_id = node.func.id
-
-        symbol_to_enum = {
-            value: key for key, value in gt_ir.NativeFunction.IR_OP_TO_PYTHON_SYMBOL.items()
-        }
-
-        native_fcn = symbol_to_enum[func_id]
+        native_fcn = gt_ir.NativeFunction.PYTHON_SYMBOL_TO_IR_OP[node.func.id]
 
         args = [self.visit(arg) for arg in node.args]
-        if len(args) != native_fcn.numargs:
+        if len(args) != native_fcn.arity:
             raise GTScriptSyntaxError(
                 "Invalid native function call", loc=gt_ir.Location.from_ast_node(node)
             )
@@ -924,43 +1025,84 @@ class IRMaker(ast.NodeVisitor):
         ast.copy_location(assignment, node)
         return self.visit_Assign(assignment)
 
+    def _unroll_computations(self, node: ast.With):
+        def recurse_unroll(node, index, items):
+            if isinstance(node.body[index], ast.With):
+                unrolled_blocks = recurse_unroll(
+                    node.body[index], 0, items + node.body[index].items
+                )
+                processed_stmts = 1
+            else:
+                new_body = list(
+                    itertools.takewhile(
+                        lambda stmt: not isinstance(stmt, ast.With), node.body[index:]
+                    )
+                )
+                unrolled_blocks = [
+                    ast.copy_location(ast.With(items=items, body=new_body), node.body[index])
+                ]
+
+                processed_stmts = len(new_body)
+
+            if index + processed_stmts < len(node.body):
+                unrolled_blocks.extend(recurse_unroll(node, index + processed_stmts, items))
+
+            return unrolled_blocks
+
+        return recurse_unroll(node, 0, node.items)
+
     def visit_With(self, node: ast.With):
         loc = gt_ir.Location.from_ast_node(node)
         syntax_error = GTScriptSyntaxError(
             f"Invalid 'with' statement at line {loc.line} (column {loc.column})", loc=loc
         )
 
-        if self.parsing_context == ParsingContext.CONTROL_FLOW:
-            comp_node = node.items[0]
-            if (
-                comp_node.optional_vars is not None
-                or not isinstance(comp_node.context_expr, ast.Call)
-                or not isinstance(comp_node.context_expr.func, ast.Name)
-                or comp_node.context_expr.func.id != "computation"
-            ):
-                raise syntax_error
-            else:
-                return self._visit_computation_node(node)
+        # If we find nested `with` blocks flatten them, i.e. transform
+        #  with computation(PARALLEL):
+        #   with interval(...):
+        #     ...
+        # into
+        #  with computation(PARALLEL), interval(...):
+        #    ...
+        # otherwise just parse the node
 
-        elif self.parsing_context == ParsingContext.COMPUTATION:
-            interval_node = node.items[0]
-            if (
-                interval_node.optional_vars is not None
-                or not isinstance(interval_node.context_expr, ast.Call)
-                or not isinstance(interval_node.context_expr.func, ast.Name)
-                or interval_node.context_expr.func.id != "interval"
-            ):
-                raise syntax_error
-            else:
-                return self._visit_interval_node(node)
-        else:
+        # Ensure top level `with` specifies the iteration order
+        if not any(
+            with_item.context_expr.func.id == "computation"
+            for with_item in node.items
+            if isinstance(with_item.context_expr, ast.Call)
+        ):
             raise syntax_error
+
+        # Parse nested `with` blocks
+        compute_blocks = []
+        for with_node in self._unroll_computations(node):
+            compute_blocks.extend(self._visit_computation_node(with_node))
+
+        # Reorder blocks
+        #  the nested computation blocks need not to be specified in their order of execution, but the backends
+        #  expect them to the given in that order so sort them. The order of execution is such that the lowest
+        #  (highest) interval is processed first if the iteration order is forward (backward).
+        if len(compute_blocks) > 1:
+            # Validate invariant
+            assert all(
+                comp_block.iteration_order == compute_blocks[0].iteration_order
+                for comp_block in compute_blocks
+            )
+
+            # Vertical regions with variable references are not supported yet
+            compute_blocks.sort(key=self._sort_blocks_key)
+            if compute_blocks[0].iteration_order == gt_ir.IterationOrder.BACKWARD:
+                compute_blocks.reverse()
+
+        return compute_blocks
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> list:
         blocks = []
         docstring = ast.get_docstring(node)
         for stmt in node.body:
-            blocks.extend(gt_utils.listify(self.visit(stmt)))
+            tmp = self.visit(stmt)
+            blocks.extend(tmp)
 
         if not all(isinstance(item, gt_ir.ComputationBlock) for item in blocks):
             raise GTScriptSyntaxError(
@@ -1071,7 +1213,9 @@ class GTScriptParser(ast.NodeVisitor):
 
                 api_annotations.append(dtype_annotation)
 
-        nonlocal_symbols, imported_symbols = GTScriptParser.collect_external_symbols(definition)
+        nonlocal_symbols, imported_symbols, splitters = GTScriptParser.collect_external_symbols(
+            definition
+        )
         canonical_ast = gt_meta.ast_dump(definition)
 
         definition._gtscript_ = dict(
@@ -1081,6 +1225,7 @@ class GTScriptParser(ast.NodeVisitor):
             canonical_ast=canonical_ast,
             nonlocals=nonlocal_symbols,
             imported=imported_symbols,
+            splitters=splitters,
         )
 
         return definition
@@ -1090,6 +1235,7 @@ class GTScriptParser(ast.NodeVisitor):
         bare_imports, from_imports, relative_imports = gt_meta.collect_imported_symbols(definition)
         wrong_imports = list(bare_imports.keys()) + list(relative_imports.keys())
         imported_names = set()
+        splitters = set()
         for key, value in from_imports.items():
             if key != value:
                 # Aliasing imported names is not allowed
@@ -1098,12 +1244,17 @@ class GTScriptParser(ast.NodeVisitor):
                 for prefix in [
                     "__externals__.",
                     "gt4py.__externals__.",
+                    "__splitters__.",
+                    "gt4py.__splitters__.",
                     "__gtscript__.",
                     "gt4py.__gtscript__.",
                 ]:
                     if key.startswith(prefix):
-                        if "__externals__" in key:
-                            imported_names.add(value.replace(prefix, "", 1))
+                        tail_value = value.replace(prefix, "", 1)
+                        if "__externals__" in key or "__splitters__" in key:
+                            imported_names.add(tail_value)
+                        if "__splitters__" in key:
+                            splitters.add(tail_value)
                         break
                 else:
                     wrong_imports.append(key)
@@ -1145,7 +1296,12 @@ class GTScriptParser(ast.NodeVisitor):
                         loc=gt_ir.Location.from_ast_node(name_nodes[collected_name][0]),
                     )
 
-        return nonlocal_symbols, imported_symbols
+        # Splitters will be resolved at run-time. Keep resolve_external_symbols
+        # from trying to resolve them at compile-time.
+        for k in splitters:
+            imported_symbols.pop(k, None)
+
+        return nonlocal_symbols, imported_symbols, splitters
 
     @staticmethod
     def eval_constant(name: str, context: dict, loc=None):
@@ -1216,6 +1372,19 @@ class GTScriptParser(ast.NodeVisitor):
             resolved_values_list = []
 
         return result
+
+    @staticmethod
+    def _create_splitter_decls(computations):
+        splitter_names = set()
+        for comp in filter(lambda comp: comp.parallel_interval is not None, computations):
+            for interval in comp.parallel_interval:
+                for axis_bound in (interval.start, interval.end):
+                    if isinstance(axis_bound.level, gt_ir.VarRef):
+                        splitter_names.add(axis_bound.level.name)
+        return [
+            gt_ir.VarDecl(name=name, data_type=gt_ir.DataType.INT64, length=1, is_api=False)
+            for name in splitter_names
+        ]
 
     def extract_arg_descriptors(self):
         api_signature = self.definition._gtscript_["api_signature"]
@@ -1343,6 +1512,7 @@ class GTScriptParser(ast.NodeVisitor):
             local_symbols={},  # Not used
             domain=domain,
             extra_temp_decls={},  # Not used
+            splitters=self.definition._gtscript_["splitters"],
         )(self.ast_root)
 
         self.definition_ir = gt_ir.StencilDefinition(
@@ -1359,6 +1529,7 @@ class GTScriptParser(ast.NodeVisitor):
             ],
             computations=computations,
             externals=self.resolved_externals,
+            splitters=self._create_splitter_decls(computations),
             docstring=inspect.getdoc(self.definition) or "",
         )
 
@@ -1395,6 +1566,7 @@ class GTScriptFrontend(gt_frontend.Frontend):
             definition._gtscript_["nonlocals"], definition._gtscript_["imported"], externals
         )
         definition._gtscript_["externals"] = resolved_externals
+        return definition
 
     @classmethod
     def generate(cls, definition, externals, options):
