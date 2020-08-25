@@ -69,6 +69,8 @@ builtins = {
     "externals",
     "computation",
     "interval",
+    "parallel",
+    "region",
     "__gtscript__",
     "__externals__",
     "__INLINED",
@@ -363,6 +365,11 @@ def interval(start, end):
     pass
 
 
+def parallel(*args):
+    """Define restricted computations in the parallel 'I-J' plane."""
+    pass
+
+
 def __INLINED(compile_if_expression):
     """Evaluate condition at compile time and inline statements from selected branch."""
     pass
@@ -462,3 +469,15 @@ def ceil(x):
 def trunc(x):
     """Return the Real value x truncated to an Integral (usually an integer)"""
     pass
+
+
+class _Region:
+    def __getitem__(self, *intervals):
+        iaxis, jaxis = intervals[0]
+        return ((iaxis.start, iaxis.stop), (jaxis.start, jaxis.stop))
+        self.iaxis = (iaxis.start, iaxis.stop)
+        self.jaxis = (jaxis.start, jaxis.stop)
+
+
+# Horizontal regions
+region = _Region()

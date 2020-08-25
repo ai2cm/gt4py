@@ -598,3 +598,95 @@ class TestNativeFunctions:
         def func(in_field: gtscript.Field[np.float_]):
             with computation(PARALLEL), interval(...):
                 in_field = asin(in_field) + 1 if 1 < in_field else sin(in_field)
+
+
+class TestRegions:
+    def test_on_interval_only(self):
+        module = f"TestRegion_on_interval_only_{id_version}"
+        externals = {}
+
+        def stencil(in_f: gtscript.Field[np.float_]):
+            from __splitters__ import i0, ie
+
+            with computation(PARALLEL), interval(...), parallel(region[i0 : 1 + ie, :]):
+                in_f = 1.0
+
+        stencil_id, def_ir = compile_definition(stencil, "stencil", module, externals=externals)
+
+        assert len(def_ir.computations) == 1
+        assert def_ir.computations[0].parallel_interval is not None
+
+    def test_with_default(self):
+        module = f"TestRegion_with_default_{id_version}"
+        externals = {}
+
+        def stencil(in_f: gtscript.Field[np.float_]):
+            from __splitters__ import i0, ie, j0, je
+
+            with computation(PARALLEL), interval(...):
+                in_f = in_f + 1.0
+                with parallel(region[i0 : 1 + ie, :], region[:, j0 : 1 + je]):
+                    in_f = 1.0
+
+        stencil_id, def_ir = compile_definition(stencil, "stencil", module, externals=externals)
+
+        assert len(def_ir.computations) == 3
+        assert def_ir.computations[0].parallel_interval is None
+        assert def_ir.computations[1].parallel_interval is not None
+        assert def_ir.computations[2].parallel_interval is not None
+
+    def test_multiple_with_default(self):
+        module = f"TestRegion_multiple_with_default_{id_version}"
+        externals = {}
+
+        def stencil(in_f: gtscript.Field[np.float_]):
+            from __splitters__ import i0, ie, j0, je
+
+            with computation(PARALLEL), interval(...):
+                in_f = in_f + 1.0
+                with parallel(region[i0 : 1 + ie, :]):
+                    in_f = 1.0
+                with parallel(region[:, j0 : 1 + je]):
+                    in_f = 2.0
+
+        stencil_id, def_ir = compile_definition(stencil, "stencil", module, externals=externals)
+
+        assert len(def_ir.computations) == 3
+        assert def_ir.computations[0].parallel_interval is None
+        assert def_ir.computations[1].parallel_interval is not None
+        assert def_ir.computations[2].parallel_interval is not None
+
+    def test_error_undefined(self):
+        module = f"TestRegion_error_undefined_{id_version}"
+        externals = {}
+
+        def stencil(in_f: gtscript.Field[np.float_]):
+            from __splitters__ import i0  # forget to add 'ia'
+
+            with computation(PARALLEL), interval(...):
+                in_f = in_f + 1.0
+                with parallel(region[i0 : 1 + ia, :]):
+                    in_f = 1.0
+
+        with pytest.raises(gt_frontend.GTScriptSyntaxError, match="Unknown symbol"):
+            compile_definition(stencil, "stencil", module, externals=externals)
+
+    def test_error_nested(self):
+        module = f"TestRegion_error_nested_{id_version}"
+        externals = {}
+
+        def stencil(in_f: gtscript.Field[np.float_]):
+            from __splitters__ import i0, ie, j0, je
+
+            with computation(PARALLEL), interval(...):
+                in_f = in_f + 1.0
+                with parallel(region[i0 : 1 + ie, :]):
+                    in_f = 1.0
+                    with parallel(region[:, j0 : 1 + je]):
+                        in_f = 2.0
+
+        # TODO This error could be improved
+        with pytest.raises(
+            gt_frontend.GTScriptSyntaxError, match="Invalid 'computation' specification"
+        ):
+            compile_definition(stencil, "stencil", module, externals=externals)

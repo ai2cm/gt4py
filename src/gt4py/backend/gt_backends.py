@@ -535,6 +535,9 @@ class BaseGTBackend(gt_backend.BasePyExtBackend, gt_backend.CLIBackendMixin):
         if not gt_src_manager.has_gt_sources() and not gt_src_manager.install_gt_sources():
             raise RuntimeError("Missing GridTools sources.")
 
+        if len(implementation_ir.splitters) > 0:
+            raise NotImplementedError("Splitters are not yet supported in the GridTools backends")
+
         pyext_module_name: Optional[str]
         pyext_file_path: Optional[str]
         if implementation_ir.multi_stages:

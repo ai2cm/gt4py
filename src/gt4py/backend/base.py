@@ -478,6 +478,7 @@ class BaseModuleGenerator(abc.ABC):
                 ndims=len(parallel_axes) + (1 if sequential_axis else 0),
             )
         )
+        splitters = [splitter.name for splitter in definition_ir.splitters]
 
         module_source = self.template.render(
             imports=self.generate_imports(),
@@ -490,6 +491,7 @@ class BaseModuleGenerator(abc.ABC):
             gt_domain_info=domain_info,
             gt_field_info=repr(self.args_data["field_info"]),
             gt_parameter_info=repr(self.args_data["parameter_info"]),
+            gt_splitters=splitters,
             gt_constants=constants,
             gt_options=options,
             stencil_signature=self.generate_signature(),
