@@ -1,7 +1,7 @@
 check-manifest>=0.40
 flake8~=3.8
 isort~=5.1
-pre-commit~=1.18
+pre-commit~=2.7
 setuptools>=40.8.0
 seed-isort-config~=2.1
 sphinx~=2.0
