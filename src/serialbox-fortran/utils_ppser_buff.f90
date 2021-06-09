@@ -34,6 +34,8 @@ MODULE utils_ppser_buff
 USE iso_c_binding
 USE m_serialize
 USE utils_ppser
+USE, INTRINSIC:: IEEE_ARITHMETIC, ONLY: IEEE_VALUE, IEEE_QUIET_NAN
+
 
 IMPLICIT NONE
 
@@ -474,10 +476,13 @@ SUBROUTINE create_buff(buff_id, serializer, savepoint, fieldname, field_type, &
   SELECT CASE (field_type)
     CASE(1)
       ALLOCATE(buff(buff_id)%buff_3d_i4(dim_i, dim_j, dim_k))
+      buff(buff_id)%buff_3d_i4 = HUGE(1)
     CASE(2)
       ALLOCATE(buff(buff_id)%buff_3d_r4(dim_i, dim_j, dim_k))
+      buff(buff_id)%buff_3d_r4 = IEEE_VALUE(1.e0, IEEE_QUIET_NAN)
     CASE(3)
       ALLOCATE(buff(buff_id)%buff_3d_r8(dim_i, dim_j, dim_k))
+      buff(buff_id)%buff_3d_r8 = IEEE_VALUE(1.d0, IEEE_QUIET_NAN)
     CASE DEFAULT
       WRITE(0,*) 'ERROR in utils_ppser_buff: unsupported field_type encountered'
   END SELECT
