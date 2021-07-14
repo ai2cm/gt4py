@@ -334,7 +334,7 @@ class ScalarAccess(LocNode):
 class FieldAccess(LocNode):
     name: SymbolRef
     offset: CartesianOffset
-    data_index: List[int] = []
+    data_index: List[Any] = []
     kind = ExprKind.FIELD
 
     @classmethod
@@ -342,8 +342,8 @@ class FieldAccess(LocNode):
         return cls(name=name, loc=loc, offset=CartesianOffset.zero())
 
     @validator("data_index")
-    def nonnegative_data_index(cls, data_index: List[int]) -> List[int]:
-        if data_index and any(index < 0 for index in data_index):
+    def nonnegative_data_index(cls, data_index: List[Any]) -> List[Any]:
+        if data_index and any(isinstance(index, int) and index < 0 for index in data_index):
             raise ValueError("Data indices must be nonnegative")
         return data_index
 

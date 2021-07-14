@@ -91,7 +91,10 @@ class _GTIRPropagateDtypeToAccess(NodeTranslator):
         return gtir.FieldAccess(
             name=node.name,
             offset=self.visit(node.offset, symtable=symtable),
-            data_index=node.data_index,
+            data_index=[
+                index if isinstance(index, int) else self.visit(index, symtable=symtable)
+                for index in node.data_index
+            ],
             dtype=symtable[node.name].dtype,
         )
 

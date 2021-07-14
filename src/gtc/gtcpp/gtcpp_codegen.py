@@ -84,8 +84,8 @@ class GTCppCodegen(codegen.TemplatedGenerator):
             else f"{offset.k}"
         )
         return (
-            f"eval({accessor_ref.name}({offset.i}, {offset.j}, {offset_k}"
-            + "".join(f", {d}" for d in accessor_ref.data_index)
+            f"eval({accessor_ref.name}({offset.i}, {offset.j}, {offset.k}"
+            + "".join(f", {self.visit(d)}" for d in accessor_ref.data_index)
             + "))"
         )
 
