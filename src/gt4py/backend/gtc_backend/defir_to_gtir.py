@@ -14,8 +14,9 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from typing import Dict, List, Union, cast
+from typing import Any, Dict, List, Optional, Set, Union, cast
 
+import eve
 from gt4py.ir import IRNodeVisitor
 from gt4py.ir.nodes import (
     ArgumentInfo,
@@ -29,8 +30,10 @@ from gt4py.ir.nodes import (
     BuiltinLiteral,
     Cast,
     ComputationBlock,
+    Domain,
     FieldDecl,
     FieldRef,
+    HorizontalIf,
     If,
     IterationOrder,
     LevelMarker,
@@ -46,6 +49,33 @@ from gt4py.ir.nodes import (
 )
 from gtc import common, gtir
 from gtc.common import ExprKind
+
+
+class CheckHorizontalRegionAccesses(eve.NodeVisitor):
+    """Ensure that FieldAccess nodes in HorizontalRegions access up-to-date memory."""
+
+    def visit_VerticalLoop(self, node: gtir.VerticalLoop) -> None:
+        self.visit(node.body, fields_set=set())
+
+    def visit_HorizontalRegion(self, node: gtir.HorizontalRegion, *, fields_set: Set[str]) -> None:
+        self.visit(node.block, fields_set=fields_set, inside_region=True)
+
+    def visit_ParAssignStmt(
+        self, node: gtir.FieldAccess, *, fields_set: Set[str], **kwargs
+    ) -> None:
+        self.visit(node.right, fields_set=fields_set, **kwargs)
+        fields_set.add(node.left.name)
+
+    def visit_FieldAccess(
+        self,
+        node: gtir.FieldAccess,
+        *,
+        fields_set: Set[str],
+        inside_region: bool = False,
+    ) -> None:
+        if inside_region and not node.offset.is_zero() and node.name in fields_set:
+            # This access will potentially read memory that has not been updated yet
+            raise ValueError(f"Race condition detected on read of {node.name}")
 
 
 class DefIRToGTIR(IRNodeVisitor):
@@ -113,8 +143,10 @@ class DefIRToGTIR(IRNodeVisitor):
     }
 
     @classmethod
-    def apply(cls, root, **kwargs):
-        return cls().visit(root)
+    def apply(cls, root, **kwargs: Any):
+        stencil = cls().visit(root)
+        CheckHorizontalRegionAccesses().visit(stencil)
+        return stencil
 
     def __init__(self):
         self._field_params = {}
@@ -171,13 +203,39 @@ class DefIRToGTIR(IRNodeVisitor):
             temporaries=temporaries,
         )
 
-    def visit_BlockStmt(self, node: BlockStmt) -> List[gtir.Stmt]:
-        return [self.visit(s) for s in node.stmts]
+    def visit_BlockStmt(self, node: BlockStmt, **kwargs: Any) -> List[gtir.Stmt]:
+        return [self.visit(s, **kwargs) for s in node.stmts]
 
-    def visit_Assign(self, node: Assign) -> gtir.ParAssignStmt:
+    def visit_HorizontalIf(self, node: HorizontalIf) -> gtir.HorizontalRegion:
+        def make_bound_or_level(bound: AxisBound, level) -> Optional[common.AxisBound]:
+            LARGE_NUM = 10000
+            if (level == LevelMarker.START and bound.offset < -LARGE_NUM) or (
+                level == LevelMarker.END and bound.offset > LARGE_NUM
+            ):
+                return None
+            else:
+                return common.AxisBound(
+                    level=self.GT4PY_LEVELMARKER_TO_GTIR_LEVELMARKER[bound.level],
+                    offset=bound.offset,
+                )
+
+        axes = {}
+        for axis in Domain.LatLonGrid().parallel_axes:
+            interval = node.intervals[axis.name]
+            axes[axis.name.lower()] = common.HorizontalInterval(
+                start=make_bound_or_level(interval.start, LevelMarker.START),
+                end=make_bound_or_level(interval.end, LevelMarker.END),
+            )
+
+        mask = gtir.HorizontalMask(**axes)
+        return gtir.HorizontalRegion(
+            mask=mask,
+            block=gtir.BlockStmt(body=self.visit(node.body)),
+        )
+
+    def visit_Assign(self, node: Assign, **kwargs: Any) -> gtir.ParAssignStmt:
         assert isinstance(node.target, FieldRef) or isinstance(node.target, VarRef)
-        left = self.visit(node.target)
-        return gtir.ParAssignStmt(left=left, right=self.visit(node.value))
+        return gtir.ParAssignStmt(left=self.visit(node.target), right=self.visit(node.value))
 
     def visit_ScalarLiteral(self, node: ScalarLiteral) -> gtir.Literal:
         return gtir.Literal(value=str(node.value), dtype=common.DataType(node.data_type.value))
@@ -229,26 +287,26 @@ class DefIRToGTIR(IRNodeVisitor):
             dtype=self._field_params[node.name].dtype if node.name in self._field_params else None,
         )
 
-    def visit_If(self, node: If) -> Union[gtir.FieldIfStmt, gtir.ScalarIfStmt]:
+    def visit_If(self, node: If, **kwargs: Any) -> Union[gtir.FieldIfStmt, gtir.ScalarIfStmt]:
         cond = self.visit(node.condition)
         if cond.kind == ExprKind.FIELD:
             return gtir.FieldIfStmt(
                 cond=cond,
-                true_branch=gtir.BlockStmt(body=self.visit(node.main_body)),
-                false_branch=gtir.BlockStmt(body=self.visit(node.else_body))
+                true_branch=gtir.BlockStmt(body=self.visit(node.main_body, **kwargs)),
+                false_branch=gtir.BlockStmt(body=self.visit(node.else_body, **kwargs))
                 if node.else_body
                 else None,
             )
         else:
             return gtir.ScalarIfStmt(
                 cond=cond,
-                true_branch=gtir.BlockStmt(body=self.visit(node.main_body)),
-                false_branch=gtir.BlockStmt(body=self.visit(node.else_body))
+                true_branch=gtir.BlockStmt(body=self.visit(node.main_body, **kwargs)),
+                false_branch=gtir.BlockStmt(body=self.visit(node.else_body, **kwargs))
                 if node.else_body
                 else None,
             )
 
-    def visit_VarRef(self, node: VarRef) -> Union[gtir.ScalarAccess, gtir.FieldAccess]:
+    def visit_VarRef(self, node: VarRef, **kwargs: Any) -> Union[gtir.ScalarAccess, gtir.FieldAccess]:
         # TODO(havogt) seems wrong, but check the DefinitionIR for
         # test_code_generation.py::test_generation_cpu[native_functions,
         # there we have a FieldAccess on a VarDecl

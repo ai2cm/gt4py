@@ -15,7 +15,20 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import enum
-from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, cast
+from typing import (
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    Generic,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+)
 
 import numpy as np
 import pydantic
@@ -294,6 +307,9 @@ class CartesianOffset(Node):
 
     def to_dict(self) -> Dict[str, int]:
         return {"i": self.i, "j": self.j, "k": self.k}
+
+    def is_zero(self) -> bool:
+        return all(x == 0 for x in self.to_dict().values())
 
 
 class VariableOffset(CartesianOffset):
@@ -735,6 +751,96 @@ class AxisBound(Node):
         if not isinstance(other, AxisBound):
             return NotImplemented
         return not self < other
+
+
+class IJExtent(LocNode):
+    i: Tuple[int, int]
+    j: Tuple[int, int]
+
+    @classmethod
+    def zero(cls) -> "IJExtent":
+        return cls(i=(0, 0), j=(0, 0))
+
+    @classmethod
+    def from_offset(cls, offset: CartesianOffset) -> "IJExtent":
+        return cls(i=(offset.i, offset.i), j=(offset.j, offset.j))
+
+    def union(*extents: "IJExtent") -> "IJExtent":
+        return IJExtent(
+            i=(min(e.i[0] for e in extents), max(e.i[1] for e in extents)),
+            j=(min(e.j[0] for e in extents), max(e.j[1] for e in extents)),
+        )
+
+    def _apply(self, other: "IJExtent", op: Callable[[int, int], int]) -> "IJExtent":
+        return IJExtent(
+            i=(op(self.i[0], other.i[0]), op(self.i[1], other.i[1])),
+            j=(op(self.j[0], other.j[0]), op(self.j[1], other.j[1])),
+        )
+
+    def __add__(self, other: "IJExtent") -> "IJExtent":
+        return self._apply(other, op=lambda x, y: x + y)
+
+    def __sub__(self, other: "IJExtent") -> "IJExtent":
+        return self._apply(other, op=lambda x, y: x - y)
+
+
+class HorizontalInterval(Node):
+    start: Optional[AxisBound]
+    end: Optional[AxisBound]
+
+    @root_validator
+    def check_start_before_end(cls, values: RootValidatorValuesType) -> RootValidatorValuesType:
+        def get_offset(bound: Optional[AxisBound], level) -> int:
+            DOMAIN_SIZE = 1000
+            OFFSET_SIZE = 1000
+
+            if not bound:
+                if level == LevelMarker.START:
+                    base_offset = 0
+                    factor = -1
+                else:
+                    base_offset = DOMAIN_SIZE
+                    factor = 1
+
+                if bound != level:
+                    raise ValueError(f"If LevelMarker, it must be {str(level)}")
+
+                offset = base_offset + factor * OFFSET_SIZE
+            else:
+                base_offset = 0 if bound.level == LevelMarker.START else DOMAIN_SIZE
+                offset = base_offset + bound.offset
+
+            return offset
+
+        start = get_offset(values["start"], LevelMarker.START)
+        end = get_offset(values["end"], LevelMarker.END)
+
+        if end <= start:
+            raise ValueError("Start must come strictly before end in an interval")
+
+        return values
+
+    @property
+    def is_single_index(self) -> bool:
+        if self.start is None or self.end is None or self.start.level != self.end.level:
+            return False
+
+        return abs(self.end.offset - self.start.offset) == 1
+
+
+class HorizontalMask(GenericNode, Generic[ExprT]):
+    i: HorizontalInterval
+    j: HorizontalInterval
+    kind = ExprKind.FIELD
+    dtype = DataType.BOOL
+
+    @property
+    def is_single_index(self) -> bool:
+        return self.i.is_single_index and self.j.is_single_index
+
+    @property
+    def intervals(self) -> Tuple[HorizontalInterval, HorizontalInterval]:
+        return (self.i, self.j)
 
 
 def data_type_to_typestr(dtype: DataType) -> str:
