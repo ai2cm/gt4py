@@ -76,6 +76,7 @@ class MaskStmtFactory(factory.Factory):
 
     mask = factory.SubFactory(FieldAccessFactory, dtype=common.DataType.BOOL)
     body = factory.List([factory.SubFactory(AssignStmtFactory)])
+    is_loop = False
 
 
 class NativeFuncCallFactory(factory.Factory):

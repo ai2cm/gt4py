@@ -46,6 +46,7 @@ from gt4py.ir.nodes import (
     UnaryOpExpr,
     VarDecl,
     VarRef,
+    While,
 )
 from gtc import common, gtir
 from gtc.common import ExprKind
@@ -305,6 +306,12 @@ class DefIRToGTIR(IRNodeVisitor):
                 if node.else_body
                 else None,
             )
+
+    def visit_While(self, node: While) -> gtir.While:
+        return gtir.While(
+            cond=self.visit(node.condition),
+            body=self.visit(node.body),
+        )
 
     def visit_VarRef(self, node: VarRef, **kwargs: Any) -> Union[gtir.ScalarAccess, gtir.FieldAccess]:
         # TODO(havogt) seems wrong, but check the DefinitionIR for
