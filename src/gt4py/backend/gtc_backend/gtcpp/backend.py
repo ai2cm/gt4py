@@ -37,6 +37,7 @@ from gtc import gtir_to_oir
 from gtc.common import DataType
 from gtc.gtcpp import gtcpp, gtcpp_codegen, oir_to_gtcpp
 from gtc.passes.gtir_pipeline import GtirPipeline
+<<<<<<< HEAD
 from gtc.passes.oir_optimizations.caches import (
     IJCacheDetection,
     KCacheDetection,
@@ -52,6 +53,11 @@ from gtc.passes.oir_optimizations.temporaries import (
     WriteBeforeReadTemporariesToScalars,
 )
 from gtc.passes.oir_optimizations.vertical_loop_merging import AdjacentLoopMerging
+=======
+from gtc.passes.oir_optimizations.caches import FillFlushToLocalKCaches
+from gtc.passes.oir_optimizations.horizontal_execution_merging import GreedyMerging
+from gtc.passes.oir_pipeline import OirPipeline
+>>>>>>> tobias/indirect_higher_dims
 
 
 if TYPE_CHECKING:
@@ -66,8 +72,9 @@ class GTCGTExtGenerator:
 
     def __call__(self, definition_ir) -> Dict[str, Dict[str, str]]:
         gtir = GtirPipeline(DefIRToGTIR.apply(definition_ir)).full()
-        oir = gtir_to_oir.GTIRToOIR().visit(gtir)
-        oir = self._optimize_oir(oir)
+        oir = OirPipeline(gtir_to_oir.GTIRToOIR().visit(gtir)).full(
+            skip=[GreedyMerging().visit, FillFlushToLocalKCaches().visit]
+        )
         gtcpp = oir_to_gtcpp.OIRToGTCpp().visit(oir)
         implementation = gtcpp_codegen.GTCppCodegen.apply(
             gtcpp, gt_backend_t=self.backend.GT_BACKEND_T
@@ -81,6 +88,7 @@ class GTCGTExtGenerator:
             "bindings": {"bindings" + bindings_ext: bindings},
         }
 
+<<<<<<< HEAD
     def _optimize_oir(self, oir):
         # TODO(jdahm) re-enable this: oir = optimize_horizontal_executions(oir, GraphMerging)
         oir = AdjacentLoopMerging().visit(oir)
@@ -96,6 +104,8 @@ class GTCGTExtGenerator:
         oir = PruneKCacheFlushes().visit(oir)
         return oir
 
+=======
+>>>>>>> tobias/indirect_higher_dims
 
 class GTCppBindingsCodegen(codegen.TemplatedGenerator):
     def __init__(self):
