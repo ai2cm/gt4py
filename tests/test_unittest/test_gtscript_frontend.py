@@ -564,7 +564,7 @@ class TestRegions:
 
     def test_error_undefined(self):
         def stencil(in_f: gtscript.Field[np.float_]):
-            from gt4py.__externals__ import i0  # forget to add 'ia'
+            from gt4py.__externals__ import i0, ia  # forget to add 'ia'
 
             with computation(PARALLEL), interval(...):
                 in_f = in_f + 1.0
