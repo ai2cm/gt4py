@@ -309,3 +309,17 @@ class Stencil(LocNode, SymbolTableTrait):
     _validate_dtype_is_set = common.validate_dtype_is_set()
     _validate_symbol_refs = common.validate_symbol_refs()
     _validate_lvalue_dims = common.validate_lvalue_dims(VerticalLoop, FieldDecl)
+
+
+class AxisIndex(Expr):
+    axis: str
+    dtype = common.DataType.INT32
+    kind = common.ExprKind.SCALAR
+
+
+class For(Stmt, SymbolTableTrait):
+    target_name: Str
+    start: Union[Expr, AxisBound]
+    end: Union[Expr, AxisBound]
+    inc: int
+    body: List[Stmt]

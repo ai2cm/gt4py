@@ -46,9 +46,10 @@
     - stage_extents: { str: str }
     - stencil_unique_name: str
     - tmp_fields: [{ "name": str, "dtype": str, "selector": [bool], "naxes": int }]
+    - requires_K_size: bool
 #}
 
-{%- set axes_names = ["I", "J", "K"] -%}
+{%- set axes_names = ["I", "J"] -%}
 
 {%- if gt_backend == "cuda" %}
 #define GT_USE_GPU
@@ -173,6 +174,10 @@ using p_domain_size_{{ axis_name }} = gt::arg<{{ arg_counter + loop.index0 }}, g
 {%- endfor %}
 {% set arg_counter = arg_counter + axes_names|length %}
 {%- endif -%}
+{% if requires_K_size %}
+using p_domain_size_K = gt::arg<{{ arg_counter }}, gt::global_parameter<gt::uint_t>>;
+{%- endif %}
+{% set arg_counter = arg_counter + 1 %}
 {% if tmp_fields -%}
 // Temporary Storages
 {%- for field in tmp_fields %}
@@ -286,6 +291,9 @@ void run(const std::array<gt::uint_t, MAX_DIM>& domain,
 {%- for axis_name in axes_names %}
         p_domain_size_{{ axis_name }}() = gt::make_global_parameter(domain[{{ loop.index0 }}]),
 {%- endfor -%}
+{%- endif -%}
+{%- if requires_K_size %}
+        p_domain_size_K() = gt::make_global_parameter(domain[2]),
 {%- endif -%}
 
 {%- set multi_comma = joiner(",") %}

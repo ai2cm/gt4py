@@ -308,6 +308,8 @@ class GTPyExtGenerator(gt_ir.IRNodeVisitor):
         self.stage_symbols = None
         self.apply_block_symbols = None
         self.declared_symbols = None
+        self.requires_positional = False
+        self.requires_K_size = False
 
     def __call__(self, impl_node: gt_ir.StencilImplementation) -> Dict[str, Dict[str, str]]:
         assert isinstance(impl_node, gt_ir.StencilImplementation)
@@ -462,6 +464,49 @@ class GTPyExtGenerator(gt_ir.IRNodeVisitor):
         body_sources.append("}")
         return body_sources
 
+    def visit_AxisIndex(self, node: gt_ir.AxisIndex) -> str:
+        self.requires_positional = True
+        return f"eval.{node.axis.lower()}()"
+
+    def _visit_ForLoopBound(self, node: gt_ir.AxisBound, axis):
+        return "static_cast<gt::int_t>({endpt}{offset:+d})".format(
+            endpt=f"eval(domain_size_{axis.name}())"
+            if node.level == gt_ir.LevelMarker.END
+            else "0",
+            offset=node.offset,
+        )
+
+    def visit_For(self, node: gt_ir.For) -> str:
+        body_sources = gt_text.TextBlock()
+
+        k_ax = gt_ir.Domain.LatLonGrid().sequential_axis
+        if isinstance(node.start, gt_ir.AxisBound):
+            start = self._visit_ForLoopBound(node.start, k_ax)
+        else:
+            start = self.visit(node.start)
+        if isinstance(node.stop, gt_ir.AxisBound):
+            stop = self._visit_ForLoopBound(node.stop, k_ax)
+        else:
+            stop = self.visit(node.stop)
+        if isinstance(node.step, int):
+            if node.step > 0:
+                body_sources.append(
+                    f"for ({node.target.name}={start}; {node.target.name}<{stop}; {node.target.name}+={node.step}){{"
+                )
+            elif node.step < 0:
+                body_sources.append(
+                    f"for ({node.target.name}={start}; {node.target.name}>{stop}; {node.target.name}-={abs(node.step)}){{"
+                )
+            else:
+                body_sources.append(
+                    f"for ({node.target.name}={start}; {node.target.name}<{stop}; {node.target.name}++){{"
+                )
+        for stmt in node.body.stmts:
+            body_sources.append(self.visit(stmt))
+        body_sources.append("}")
+
+        return body_sources.text
+
     def visit_While(self, node: gt_ir.While) -> gt_text.TextBlock:
         body_sources = gt_text.TextBlock()
         body_sources.append("while ({condition}) {{".format(condition=self.visit(node.condition)))
@@ -548,12 +593,21 @@ class GTPyExtGenerator(gt_ir.IRNodeVisitor):
             args.append(arg)
 
         if len(tuple(gt_ir.iter_nodes_of_type(node, gt_ir.AxisPosition))) > 0:
+            parallel_axes_names = [axis.name for axis in self.domain.parallel_axes]
             args.extend(
                 [
                     {"name": f"domain_size_{name}", "access_type": "in", "extent": None}
-                    for name in self.domain.axes_names
+                    for name in parallel_axes_names
                 ]
             )
+
+        for for_node in gt_ir.iter_nodes_of_type(node, gt_ir.For):
+            if any(
+                isinstance(bound, gt_ir.AxisBound) and bound.level == gt_ir.LevelMarker.END
+                for bound in (for_node.start, for_node.stop)
+            ):
+                args.append({"name": "domain_size_K", "access_type": "in", "extent": None})
+                self.requires_K_size = True
 
         # Create regions and computations
         regions = []
@@ -620,7 +674,7 @@ class GTPyExtGenerator(gt_ir.IRNodeVisitor):
         ]
 
         stage_extents = {}
-        requires_positional = len(tuple(gt_ir.iter_nodes_of_type(node, gt_ir.AxisPosition))) > 0
+        self.requires_positional = len(tuple(gt_ir.iter_nodes_of_type(node, gt_ir.AxisPosition))) > 0
         stage_functors = {}
         for multi_stage in node.multi_stages:
             for group in multi_stage.groups:
@@ -647,13 +701,14 @@ class GTPyExtGenerator(gt_ir.IRNodeVisitor):
             halo_sizes=halo_sizes,
             k_axis=k_axis,
             module_name=self.module_name,
-            requires_positional=requires_positional,
+            requires_positional=self.requires_positional,
             multi_stages=multi_stages,
             parameters=parameters,
             stage_functors=stage_functors,
             stage_extents=stage_extents,
             stencil_unique_name=self.class_name,
             tmp_fields=tmp_fields,
+            requires_K_size=self.requires_K_size,
         )
 
         sources: Dict[str, Dict[str, str]] = {"computation": {}, "bindings": {}}

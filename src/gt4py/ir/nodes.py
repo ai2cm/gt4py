@@ -9,7 +9,7 @@
 # GT4Py is free software: you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the
 # Free Software Foundation, either version 3 of the License, or any later
-# version. See the LICENSE.txt file at the top-level directory of this
+# version. See the LICENSE.txindex(K)t file at the top-level directory of this
 # distribution for a copy of the license or check <https://www.gnu.org/licenses/>.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
@@ -113,6 +113,7 @@ storing a reference to the piece of source code which originated the node.
     Statement   = Decl
                 | Assign(target: Ref, value: Expr)
                 | If(condition: expr, main_body: BlockStmt, else_body: BlockStmt)
+                | For(target: Decl, start: AxisBound | Expr, stop: AxisBound | Expr, body: BlockStmt)
                 | HorizontalIf(intervals: Dict[str, Interval], body: BlockStmt)
                 | While(condition: expr, body: BlockStmt)
                 | BlockStmt
@@ -770,6 +771,18 @@ class HorizontalIf(Statement):
 class HorizontalIf(Statement):
     intervals = attribute(of=DictOf[str, AxisInterval])
     body = attribute(of=BlockStmt)
+
+
+# TODO: Relocate this in the file next to other Statement nodes
+# Issue: depends on AxisInterval which is defined below
+@attribclass
+class For(Statement):
+    target = attribute(of=VarDecl)
+    start = attribute(of=UnionOf[AxisBound, Expr])
+    stop = attribute(of=UnionOf[AxisBound, Expr])
+    step = attribute(of=int)
+    body = attribute(of=BlockStmt)
+    loc = attribute(of=Location, optional=True)
 
 
 # TODO Find a better place for this in the file.

@@ -79,10 +79,12 @@ builtins = {
     "__externals__",
     "__INLINED",
     "compile_assert",
+    "index",
+    "range",
     *MATH_BUILTINS,
 }
 
-IGNORE_WHEN_INLINING = {*MATH_BUILTINS, "compile_assert"}
+IGNORE_WHEN_INLINING = {*MATH_BUILTINS, "compile_assert", "index", "range", "K"}
 
 __all__ = list(builtins) + ["function", "stencil", "lazy_stencil"]
 
@@ -591,6 +593,16 @@ class _Region:
 
 # Horizontal regions
 region = _Region()
+
+
+def index(axis):
+    """Current axis index."""
+    pass
+
+
+def range(start, stop):
+    """Range from start to stop"""
+    pass
 
 
 def __INLINED(compile_if_expression):

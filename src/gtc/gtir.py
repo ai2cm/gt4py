@@ -27,7 +27,7 @@ Analysis is required to generate valid code (complying with the parallel model)
 - `FieldIfStmt` expansion to comply with the parallel model
 """
 
-from typing import Any, Generator, List, Set, Tuple
+from typing import Any, Generator, List, Set, Tuple, Union
 
 from pydantic import validator
 from pydantic.class_validators import root_validator
@@ -219,6 +219,20 @@ class FieldDecl(Decl):
 
 class ScalarDecl(Decl):
     pass
+
+
+class AxisIndex(Expr):
+    axis: str
+    dtype = common.DataType.INT32
+    kind = common.ExprKind.SCALAR
+
+
+class For(Stmt):
+    target: ScalarDecl
+    start: Union[Expr, AxisBound]
+    end: Union[Expr, AxisBound]
+    inc: int
+    body: List[Stmt]
 
 
 class Interval(LocNode):

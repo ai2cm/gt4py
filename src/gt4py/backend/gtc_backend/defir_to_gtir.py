@@ -22,6 +22,7 @@ from gt4py.ir.nodes import (
     ArgumentInfo,
     Assign,
     AxisBound,
+    AxisIndex,
     AxisInterval,
     BinaryOperator,
     BinOpExpr,
@@ -33,6 +34,7 @@ from gt4py.ir.nodes import (
     Domain,
     FieldDecl,
     FieldRef,
+    For,
     HorizontalIf,
     If,
     IterationOrder,
@@ -316,15 +318,23 @@ class DefIRToGTIR(IRNodeVisitor):
             body=self.visit(node.body),
         )
 
-    def visit_VarRef(self, node: VarRef, **kwargs: Any) -> Union[gtir.ScalarAccess, gtir.FieldAccess]:
-        # TODO(havogt) seems wrong, but check the DefinitionIR for
-        # test_code_generation.py::test_generation_cpu[native_functions,
-        # there we have a FieldAccess on a VarDecl
-        # Probably the frontend needs to be fixed.
-        if node.name in self._scalar_params:
-            return gtir.ScalarAccess(name=node.name)
-        else:
-            return gtir.FieldAccess(name=node.name, offset=gtir.CartesianOffset.zero())
+    def visit_AxisIndex(self, node: AxisIndex) -> gtir.AxisIndex:
+        return gtir.AxisIndex(axis=node.axis)
+
+    def visit_For(self, node: For) -> gtir.For:
+        return gtir.For(
+            target=gtir.ScalarDecl(name=node.target.name, dtype=common.DataType.INT32),
+            start=self.visit(node.start),
+            end=self.visit(node.stop),
+            inc=node.step,
+            body=[stmt for stmt in self.visit(node.body)],
+        )
+
+    def visit_VarRef(self, node: VarRef, **kwargs):
+        # TODO(havogt, jdahm) might break for
+        # test_code_generation.py::test_generation_cpu[native_functions.
+        # There we have a FieldAccess on a VarDecl. Probably the frontend needs to be fixed.
+        return gtir.ScalarAccess(name=node.name)
 
     def visit_AxisInterval(self, node: AxisInterval):
         return self.visit(node.start), self.visit(node.end)
