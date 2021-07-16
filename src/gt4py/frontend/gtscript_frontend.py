@@ -22,7 +22,6 @@ import itertools
 import numbers
 import textwrap
 import types
-import warnings
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -1559,7 +1558,7 @@ class IRMaker(ast.NodeVisitor):
                         f"Invalid 'with' statement at line {loc.line} (column {loc.column}). Intervals must be specified in order of execution."
                     )
                 if not self._are_intervals_nonoverlapping(compute_blocks):
-                    warnings.warn(
+                    raise GTScriptSyntaxError(
                         f"Overlapping intervals detected at line {loc.line} (column {loc.column})"
                     )
 
