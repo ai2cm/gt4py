@@ -59,8 +59,8 @@ class GTCGTExtGenerator:
         oir = OirPipeline(gtir_to_oir.GTIRToOIR().visit(gtir)).full(
             skip=[
                 graph_merge_horizontal_executions,
-                KCacheDetection().visit,
-                FillFlushToLocalKCaches().visit,
+                KCacheDetection,
+                FillFlushToLocalKCaches,
             ]
         )
         gtcpp = oir_to_gtcpp.OIRToGTCpp().visit(oir)
