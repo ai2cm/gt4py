@@ -414,9 +414,9 @@ class AxisPosition(Expr):
 @attribclass
 class AxisIndex(Expr):
     axis = attribute(of=str)
-    endpt = attribute(of=LevelMarker)
-    offset = attribute(of=int)
     data_type = attribute(of=DataType, default=DataType.INT32)
+    endpt = attribute(of=LevelMarker, optional=True)
+    offset = attribute(of=int, optional=True)
 
 
 @enum.unique

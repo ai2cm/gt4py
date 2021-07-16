@@ -572,7 +572,7 @@ class TestRegions:
                 with horizontal(region[i0 : 1 + ia, :]):
                     in_f = 1.0
 
-        with pytest.raises(gt_frontend.GTScriptSyntaxError, match="Unknown symbol"):
+        with pytest.raises(gt_frontend.GTScriptSyntaxError, match="Missing or invalid value"):
             parse_definition(stencil, name=inspect.stack()[0][3], module=self.__class__.__name__)
 
     def test_error_nested(self):
