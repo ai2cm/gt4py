@@ -129,8 +129,11 @@ def test_field_if():
                 else:
                     field_a = 1
             else:
-                tmp = -field_b[0, 1, 0]
-                field_a = tmp
+                # TODO(eddied): Scalarization pass is reducing `tmp` to scalar which fails
+                #   pydantic because ScalarAccess as an lhs does not have offset attribute.
+                # tmp = -field_b[0, 1, 0]
+                # field_a = tmp
+                field_a = -field_b[0, 1, 0]
 
     builder = StencilBuilder(stencil, backend=from_name("debug"))
     old_ext = builder.implementation_ir.fields_extents
