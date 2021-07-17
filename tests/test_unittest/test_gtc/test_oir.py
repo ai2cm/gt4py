@@ -19,7 +19,14 @@ import itertools
 import pytest
 from pydantic.error_wrappers import ValidationError
 
-from gtc.common import CartesianOffset, DataType, HorizontalInterval, LevelMarker, LoopOrder, VariableOffset
+from gtc.common import (
+    CartesianOffset,
+    DataType,
+    HorizontalInterval,
+    LevelMarker,
+    LoopOrder,
+    VariableOffset,
+)
 from gtc.oir import AxisBound, FieldAccess, Interval
 
 from .oir_utils import (

@@ -18,7 +18,6 @@ import inspect
 import textwrap
 import types
 from typing import Any, Callable, Dict, Optional, Type
-from gt4py.ir.nodes import DataType
 
 import numpy as np
 import pytest
@@ -43,7 +42,9 @@ from gt4py.gtscript import (
     region,
     sin,
 )
+from gt4py.ir.nodes import DataType
 from gt4py.utils.attrib import Union as UnionOf
+
 
 # ---- Utilities -----
 

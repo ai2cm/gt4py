@@ -674,7 +674,9 @@ class GTPyExtGenerator(gt_ir.IRNodeVisitor):
         ]
 
         stage_extents = {}
-        self.requires_positional = len(tuple(gt_ir.iter_nodes_of_type(node, gt_ir.AxisPosition))) > 0
+        self.requires_positional = (
+            len(tuple(gt_ir.iter_nodes_of_type(node, gt_ir.AxisPosition))) > 0
+        )
         stage_functors = {}
         for multi_stage in node.multi_stages:
             for group in multi_stage.groups:

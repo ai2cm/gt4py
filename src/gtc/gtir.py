@@ -157,6 +157,7 @@ class HorizontalRegion(Stmt):
     mask: HorizontalMask
     block: BlockStmt
 
+
 class While(common.While[Stmt, Expr], Stmt):
     """
     While loop with a field or scalar expression as condition.
