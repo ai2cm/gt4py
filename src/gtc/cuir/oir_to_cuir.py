@@ -27,7 +27,9 @@ class OIRToCUIR(eve.NodeTranslator):
         return cuir.Literal(value=node.value, dtype=node.dtype)
 
     def visit_FieldDecl(self, node: oir.FieldDecl, **kwargs: Any) -> cuir.FieldDecl:
-        return cuir.FieldDecl(name=node.name, dtype=node.dtype, dimensions=node.dimensions)
+        return cuir.FieldDecl(
+            name=node.name, dtype=node.dtype, dimensions=node.dimensions, data_dims=node.data_dims
+        )
 
     def visit_ScalarDecl(self, node: oir.ScalarDecl, **kwargs: Any) -> cuir.FieldDecl:
         return cuir.ScalarDecl(name=node.name, dtype=node.dtype)
@@ -45,6 +47,11 @@ class OIRToCUIR(eve.NodeTranslator):
 
     def visit_Temporary(self, node: oir.Temporary, **kwargs: Any) -> cuir.Temporary:
         return cuir.Temporary(name=node.name, dtype=node.dtype)
+
+    def visit_VariableOffset(
+        self, node: common.VariableOffset, **kwargs: Any
+    ) -> cuir.VariableOffset:
+        return cuir.VariableOffset(i=node.i, j=node.j, k=self.visit(node.k, **kwargs))
 
     def visit_FieldAccess(
         self,
@@ -86,7 +93,9 @@ class OIRToCUIR(eve.NodeTranslator):
 
     def visit_MaskStmt(self, node: oir.MaskStmt, **kwargs: Any) -> cuir.MaskStmt:
         return cuir.MaskStmt(
-            mask=self.visit(node.mask, **kwargs), body=self.visit(node.body, **kwargs)
+            mask=self.visit(node.mask, **kwargs),
+            body=self.visit(node.body, **kwargs),
+            is_loop=node.is_loop,
         )
 
     def visit_Cast(self, node: oir.Cast, **kwargs: Any) -> cuir.Cast:

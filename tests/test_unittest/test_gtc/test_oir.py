@@ -14,18 +14,32 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import itertools
+
 import pytest
 from pydantic.error_wrappers import ValidationError
 
-from gtc.common import DataType, LoopOrder
+from gtc.common import (
+    CartesianOffset,
+    DataType,
+    HorizontalInterval,
+    LevelMarker,
+    LoopOrder,
+    VariableOffset,
+)
+from gtc.oir import AxisBound, FieldAccess, Interval
 
 from .oir_utils import (
     AssignStmtFactory,
     FieldAccessFactory,
     FieldDeclFactory,
     HorizontalExecutionFactory,
+    HorizontalMaskFactory,
+    HorizontalSpecializationFactory,
+    HorizontalSwitchFactory,
     MaskStmtFactory,
     StencilFactory,
+    VariableOffsetFactory,
     VerticalLoopFactory,
     VerticalLoopSectionFactory,
 )
@@ -39,6 +53,227 @@ def test_no_horizontal_offset_allowed():
 def test_mask_must_be_bool():
     with pytest.raises(ValidationError, match=r".*must be.* bool.*"):
         MaskStmtFactory(mask=FieldAccessFactory(dtype=DataType.INT32))
+
+
+EQUAL_AXISBOUNDS = [
+    (AxisBound.start(), AxisBound.start()),
+    (AxisBound.end(), AxisBound.end()),
+    (AxisBound.from_end(-1), AxisBound.from_end(-1)),
+]
+LESS_AXISBOUNDS = [
+    (AxisBound.start(), AxisBound.end()),
+    (AxisBound.start(), AxisBound.from_start(1)),
+    (AxisBound.from_end(-1), AxisBound.end()),
+    (AxisBound.from_start(1), AxisBound.from_end(-1)),
+]
+GREATER_AXISBOUNDS = [
+    (AxisBound.end(), AxisBound.start()),
+    (AxisBound.from_start(1), AxisBound.start()),
+    (AxisBound.end(), AxisBound.from_end(-1)),
+    (AxisBound.from_end(-1), AxisBound.from_start(1)),
+]
+
+
+class TestAxisBoundsComparison:
+    @pytest.mark.parametrize(["lhs", "rhs"], EQUAL_AXISBOUNDS)
+    def test_eq_true(self, lhs, rhs):
+        res1 = lhs == rhs
+        assert isinstance(res1, bool)
+        assert res1
+
+        res2 = rhs == lhs
+        assert isinstance(res2, bool)
+        assert res2
+
+    @pytest.mark.parametrize(
+        ["lhs", "rhs"],
+        LESS_AXISBOUNDS + GREATER_AXISBOUNDS,
+    )
+    def test_eq_false(self, lhs, rhs):
+        res1 = lhs == rhs
+        assert isinstance(res1, bool)
+        assert not res1
+
+        res2 = rhs == lhs
+        assert isinstance(res2, bool)
+        assert not res2
+
+    @pytest.mark.parametrize(["lhs", "rhs"], LESS_AXISBOUNDS)
+    def test_lt_true(self, lhs, rhs):
+        res = lhs < rhs
+        assert isinstance(res, bool)
+        assert res
+
+    @pytest.mark.parametrize(
+        ["lhs", "rhs"],
+        GREATER_AXISBOUNDS + EQUAL_AXISBOUNDS,
+    )
+    def test_lt_false(self, lhs, rhs):
+        res = lhs < rhs
+        assert isinstance(res, bool)
+        assert not res
+
+    @pytest.mark.parametrize(["lhs", "rhs"], GREATER_AXISBOUNDS)
+    def test_gt_true(self, lhs, rhs):
+        res = lhs > rhs
+        assert isinstance(res, bool)
+        assert res
+
+    @pytest.mark.parametrize(["lhs", "rhs"], LESS_AXISBOUNDS + EQUAL_AXISBOUNDS)
+    def test_gt_false(self, lhs, rhs):
+        res = lhs > rhs
+        assert isinstance(res, bool)
+        assert not res
+
+    @pytest.mark.parametrize(["lhs", "rhs"], LESS_AXISBOUNDS + EQUAL_AXISBOUNDS)
+    def test_le_true(self, lhs, rhs):
+        res = lhs <= rhs
+        assert isinstance(res, bool)
+        assert res
+
+    @pytest.mark.parametrize(["lhs", "rhs"], GREATER_AXISBOUNDS)
+    def test_le_false(self, lhs, rhs):
+        res = lhs <= rhs
+        assert isinstance(res, bool)
+        assert not res
+
+    @pytest.mark.parametrize(["lhs", "rhs"], GREATER_AXISBOUNDS + EQUAL_AXISBOUNDS)
+    def test_ge_true(self, lhs, rhs):
+        res = lhs >= rhs
+        assert isinstance(res, bool)
+        assert res
+
+    @pytest.mark.parametrize(["lhs", "rhs"], LESS_AXISBOUNDS)
+    def test_ge_false(self, lhs, rhs):
+        res = lhs >= rhs
+        assert isinstance(res, bool)
+        assert not res
+
+
+COVER_INTERVALS = [
+    (
+        Interval(start=AxisBound.start(), end=AxisBound.end()),
+        Interval(start=AxisBound.start(), end=AxisBound.end()),
+    ),
+    (
+        Interval(start=AxisBound.start(), end=AxisBound.end()),
+        Interval(start=AxisBound.start(), end=AxisBound.from_end(-1)),
+    ),
+    (
+        Interval(start=AxisBound.start(), end=AxisBound.end()),
+        Interval(start=AxisBound.from_start(1), end=AxisBound.end()),
+    ),
+    (
+        Interval(start=AxisBound.start(), end=AxisBound.end()),
+        Interval(start=AxisBound.from_start(1), end=AxisBound.from_end(-1)),
+    ),
+    (
+        Interval(start=AxisBound.from_start(1), end=AxisBound.from_start(4)),
+        Interval(start=AxisBound.from_start(1), end=AxisBound.from_start(4)),
+    ),
+    (
+        Interval(start=AxisBound.from_start(1), end=AxisBound.from_start(4)),
+        Interval(start=AxisBound.from_start(2), end=AxisBound.from_start(4)),
+    ),
+    (
+        Interval(start=AxisBound.from_start(1), end=AxisBound.from_start(4)),
+        Interval(start=AxisBound.from_start(1), end=AxisBound.from_start(3)),
+    ),
+    (
+        Interval(start=AxisBound.from_start(1), end=AxisBound.from_start(4)),
+        Interval(start=AxisBound.from_start(2), end=AxisBound.from_start(3)),
+    ),
+]
+SUBSET_INTERVALS = [
+    (
+        Interval(start=AxisBound.start(), end=AxisBound.from_end(-1)),
+        Interval(start=AxisBound.start(), end=AxisBound.end()),
+    ),
+    (
+        Interval(start=AxisBound.from_start(1), end=AxisBound.end()),
+        Interval(start=AxisBound.start(), end=AxisBound.end()),
+    ),
+    (
+        Interval(start=AxisBound.from_start(1), end=AxisBound.from_end(-1)),
+        Interval(start=AxisBound.start(), end=AxisBound.end()),
+    ),
+    (
+        Interval(start=AxisBound.from_start(2), end=AxisBound.from_start(4)),
+        Interval(start=AxisBound.from_start(1), end=AxisBound.from_start(4)),
+    ),
+    (
+        Interval(start=AxisBound.from_start(1), end=AxisBound.from_start(3)),
+        Interval(start=AxisBound.from_start(1), end=AxisBound.from_start(4)),
+    ),
+    (
+        Interval(start=AxisBound.from_start(2), end=AxisBound.from_start(3)),
+        Interval(start=AxisBound.from_start(1), end=AxisBound.from_start(4)),
+    ),
+]
+DISJOINT_INTERVALS = [
+    (
+        Interval(start=AxisBound.start(), end=AxisBound.from_end(-1)),
+        Interval(start=AxisBound.from_end(-1), end=AxisBound.end()),
+    ),
+    (
+        Interval(start=AxisBound.start(), end=AxisBound.from_start(1)),
+        Interval(start=AxisBound.from_start(1), end=AxisBound.end()),
+    ),
+    (
+        Interval(start=AxisBound.start(), end=AxisBound.from_start(3)),
+        Interval(start=AxisBound.from_end(-1), end=AxisBound.end()),
+    ),
+    (
+        Interval(start=AxisBound.start(), end=AxisBound.from_start(3)),
+        Interval(start=AxisBound.from_end(1), end=AxisBound.from_end(2)),
+    ),
+]
+OVERLAP_INTERVALS = [
+    (
+        Interval(start=AxisBound.start(), end=AxisBound.from_end(-1)),
+        Interval(start=AxisBound.from_end(-2), end=AxisBound.end()),
+    ),
+    (
+        Interval(start=AxisBound.start(), end=AxisBound.from_start(1)),
+        Interval(start=AxisBound.start(), end=AxisBound.from_start(2)),
+    ),
+]
+
+
+class TestIntervalOperations:
+    @pytest.mark.parametrize(["lhs", "rhs"], COVER_INTERVALS)
+    def test_covers_true(self, lhs, rhs):
+        res = lhs.covers(rhs)
+        assert isinstance(res, bool)
+        assert res
+
+    @pytest.mark.parametrize(
+        ["lhs", "rhs"], SUBSET_INTERVALS + OVERLAP_INTERVALS + DISJOINT_INTERVALS
+    )
+    def test_covers_false(self, lhs, rhs):
+        res = lhs.covers(rhs)
+        assert isinstance(res, bool)
+        assert not res
+
+    @pytest.mark.parametrize(["lhs", "rhs"], COVER_INTERVALS + SUBSET_INTERVALS + OVERLAP_INTERVALS)
+    def test_intersects_true(self, lhs, rhs):
+        res1 = lhs.intersects(rhs)
+        assert isinstance(res1, bool)
+        assert res1
+
+        res2 = lhs.intersects(rhs)
+        assert isinstance(res2, bool)
+        assert res2
+
+    @pytest.mark.parametrize(["lhs", "rhs"], DISJOINT_INTERVALS)
+    def test_intersects_false(self, lhs, rhs):
+        res1 = lhs.intersects(rhs)
+        assert isinstance(res1, bool)
+        assert not res1
+
+        res2 = rhs.intersects(lhs)
+        assert isinstance(res2, bool)
+        assert not res2
 
 
 def test_assign_to_ik_fwd():
@@ -67,3 +302,91 @@ def test_assign_to_ik_fwd():
                 ],
             ),
         )
+
+
+def test_variable_offset_with_float_field():
+    with pytest.raises(ValueError, match=r"Variable k-offset must have an integer type"):
+        VariableOffsetFactory(
+            k__name="offset_field",
+            k__dtype=DataType.FLOAT32,
+        )
+
+
+def test_assign_with_variable_offset():
+    in_name = "in_field"
+    out_name = "out_field"
+    offset_name = "offset_field"
+
+    testee = StencilFactory(
+        params=[
+            FieldDeclFactory(name=in_name, dtype=DataType.FLOAT32, dimensions=(True, True, True)),
+            FieldDeclFactory(
+                name=offset_name, dtype=DataType.INT32, dimensions=(True, True, False)
+            ),
+            FieldDeclFactory(name=out_name, dtype=DataType.FLOAT32, dimensions=(True, True, True)),
+        ],
+        vertical_loops__0=VerticalLoopFactory(
+            loop_order=LoopOrder.FORWARD,
+            sections=[
+                VerticalLoopSectionFactory(
+                    horizontal_executions=[
+                        HorizontalExecutionFactory(
+                            body=[
+                                AssignStmtFactory(
+                                    left__name=out_name,
+                                    right=FieldAccessFactory(
+                                        name=in_name,
+                                        offset=VariableOffsetFactory(
+                                            k__name=offset_name,
+                                            k__dtype=DataType.INT32,
+                                        ),
+                                    ),
+                                )
+                            ]
+                        )
+                    ]
+                )
+            ],
+        ),
+    )
+
+    variable_assign = testee.vertical_loops[0].sections[0].horizontal_executions[0].body[0]
+    assert isinstance(variable_assign.left.offset, CartesianOffset)
+    assert isinstance(variable_assign.right.offset, VariableOffset)
+    assert isinstance(variable_assign.right.offset.k, FieldAccess)
+    assert isinstance(variable_assign.right.offset.k.offset, CartesianOffset)
+
+
+def test_overlapping_horizontal_switch():
+    with pytest.raises(ValidationError, match="must be disjoint specializations"):
+        AssignStmtFactory(
+            right=HorizontalSwitchFactory(
+                values=[HorizontalSpecializationFactory(), HorizontalSpecializationFactory()]
+            )
+        )
+
+
+@pytest.fixture
+def corner_specializations():
+    specializations = []
+    for i_level, j_level in itertools.product(LevelMarker, LevelMarker):
+        i_interval = HorizontalInterval(
+            start=AxisBound(level=i_level, offset=0), end=AxisBound(level=i_level, offset=1)
+        )
+        j_interval = HorizontalInterval(
+            start=AxisBound(level=j_level, offset=0), end=AxisBound(level=j_level, offset=1)
+        )
+        specializations.append(
+            HorizontalSpecializationFactory(
+                mask=HorizontalMaskFactory(i=i_interval, j=j_interval),
+                expr__name="field",
+                expr__offset__i=1,
+            )
+        )
+    return specializations
+
+
+def test_horizontal_switch_corner_specializations(corner_specializations):
+    AssignStmtFactory(
+        left__name="field", right=HorizontalSwitchFactory(values=corner_specializations)
+    )

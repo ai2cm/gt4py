@@ -24,6 +24,7 @@ import collections
 import inspect
 import numbers
 import types
+from typing import Callable, Dict, Type
 
 import numpy as np
 
@@ -78,10 +79,12 @@ builtins = {
     "__externals__",
     "__INLINED",
     "compile_assert",
+    "index",
+    "range",
     *MATH_BUILTINS,
 }
 
-IGNORE_WHEN_INLINING = {*MATH_BUILTINS, "compile_assert"}
+IGNORE_WHEN_INLINING = {*MATH_BUILTINS, "compile_assert", "index", "range", "K"}
 
 __all__ = list(builtins) + ["function", "stencil", "lazy_stencil"]
 
@@ -103,7 +106,7 @@ _VALID_DATA_TYPES = (
 )
 
 
-def _set_arg_dtypes(definition, dtypes):
+def _set_arg_dtypes(definition: Callable[..., None], dtypes: Dict[Type, Type]):
     assert isinstance(definition, types.FunctionType)
     annotations = getattr(definition, "__annotations__", {})
     original_annotations = {**annotations}
@@ -121,7 +124,7 @@ def _set_arg_dtypes(definition, dtypes):
             else:
                 raise ValueError(f"Missing '{value}' dtype definition for arg '{arg}'")
 
-    return definition, original_annotations
+    return original_annotations
 
 
 def function(func):
@@ -252,7 +255,7 @@ def stencil(
             elif callable(definition_func):  # General callable
                 definition_func = definition_func.__call__
 
-        _, original_annotations = _set_arg_dtypes(definition_func, dtypes or {})
+        original_annotations = _set_arg_dtypes(definition_func, dtypes or {})
         out = gt_loader.gtscript_loader(
             definition_func,
             backend=backend,
@@ -355,14 +358,14 @@ def lazy_stencil(
     return _decorator(definition)
 
 
-class _AxisOffset:
+class AxisIndex:
     def __init__(self, axis: str, index: int, offset: int = 0):
         self.axis = axis
         self.index = index
         self.offset = offset
 
     def __repr__(self):
-        return f"_AxisOffset(axis={self.axis}, index={self.index}, offset={self.offset})"
+        return f"AxisIndex(axis={self.axis}, index={self.index}, offset={self.offset})"
 
     def __eq__(self, other):
         return repr(self) == repr(other)
@@ -376,7 +379,7 @@ class _AxisOffset:
         if offset == 0:
             return self
         else:
-            return _AxisOffset(self.axis, self.index, self.offset + offset)
+            return AxisIndex(self.axis, self.index, self.offset + offset)
 
     def __radd__(self, offset: int):
         return self.__add__(offset)
@@ -388,7 +391,7 @@ class _AxisOffset:
         return self.__radd__(-offset)
 
 
-class _AxisInterval:
+class AxisInterval:
     def __init__(self, axis: str, start: int, end: int):
         assert start < end
         self.axis = axis
@@ -396,7 +399,7 @@ class _AxisInterval:
         self.end = end
 
     def __repr__(self):
-        return f"_AxisInterval(axis={self.axis}, start={self.start}, end={self.end})"
+        return f"AxisInterval(axis={self.axis}, start={self.start}, end={self.end})"
 
     def __str__(self):
         return f"{self.axis}[{self.start}:{self.end}]"
@@ -406,33 +409,33 @@ class _AxisInterval:
 
 
 # GTScript builtins: domain axes
-class _Axis:
+class Axis:
     def __init__(self, name: str):
         assert name
         self.name = name
 
     def __repr__(self):
-        return f"_Axis(name={self.name})"
+        return f"Axis(name={self.name})"
 
     def __str__(self):
         return self.name
 
     def __getitem__(self, interval):
         if isinstance(interval, slice):
-            return _AxisInterval(self.name, interval.start, interval.stop)
+            return AxisInterval(self.name, interval.start, interval.stop)
         elif isinstance(interval, int):
-            return _AxisOffset(self.name, interval)
+            return AxisIndex(self.name, interval)
         else:
             raise TypeError("Unrecognized index type")
 
 
-I = _Axis("I")
+I = Axis("I")
 """I axes (parallel)."""
 
-J = _Axis("J")
+J = Axis("J")
 """J axes (parallel)."""
 
-K = _Axis("K")
+K = Axis("K")
 """K axes (sequential)."""
 
 IJ = (I, J)
@@ -449,7 +452,7 @@ IJK = (I, J, K)
 
 
 def mask_from_axes(axes):
-    if isinstance(axes, _Axis):
+    if isinstance(axes, Axis):
         axes = (axes,)
     axes = list(a.name for a in axes)
     return list(a in axes for a in list(a.name for a in IJK))
@@ -502,9 +505,9 @@ class _FieldDescriptorMaker:
     @staticmethod
     def _is_axes_spec(spec) -> bool:
         return (
-            isinstance(spec, _Axis)
+            isinstance(spec, Axis)
             or isinstance(spec, collections.abc.Collection)
-            and all(isinstance(i, _Axis) for i in spec)
+            and all(isinstance(i, Axis) for i in spec)
         )
 
     def __getitem__(self, field_spec):
@@ -590,6 +593,16 @@ class _Region:
 
 # Horizontal regions
 region = _Region()
+
+
+def index(axis):
+    """Current axis index."""
+    pass
+
+
+def range(start, stop):
+    """Range from start to stop"""
+    pass
 
 
 def __INLINED(compile_if_expression):

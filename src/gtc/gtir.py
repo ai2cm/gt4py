@@ -27,7 +27,7 @@ Analysis is required to generate valid code (complying with the parallel model)
 - `FieldIfStmt` expansion to comply with the parallel model
 """
 
-from typing import Any, Generator, List, Set, Tuple
+from typing import Any, Generator, List, Set, Tuple, Union
 
 from pydantic import validator
 from pydantic.class_validators import root_validator
@@ -39,20 +39,14 @@ from gtc import common
 from gtc.common import AxisBound, LocNode
 
 
+@utils.noninstantiable
 class Expr(common.Expr):
-    # TODO Eve could provide support for making a node abstract
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if type(self) is Expr:
-            raise TypeError("Trying to instantiate `Expr` abstract class.")
-        super().__init__(*args, **kwargs)
+    pass
 
 
+@utils.noninstantiable
 class Stmt(common.Stmt):
-    # TODO Eve could provide support for making a node abstract
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if type(self) is Stmt:
-            raise TypeError("Trying to instantiate `Stmt` abstract class.")
-        super().__init__(*args, **kwargs)
+    pass
 
 
 class BlockStmt(common.BlockStmt[Stmt], Stmt):
@@ -64,6 +58,10 @@ class Literal(common.Literal, Expr):  # type: ignore
 
 
 class CartesianOffset(common.CartesianOffset):
+    pass
+
+
+class VariableOffset(common.VariableOffset):
     pass
 
 
@@ -151,6 +149,40 @@ class ScalarIfStmt(common.IfStmt[BlockStmt, Expr], Stmt):
         return cond
 
 
+class HorizontalMask(common.HorizontalMask[Expr], Expr):
+    pass
+
+
+class HorizontalRegion(Stmt):
+    mask: HorizontalMask
+    block: BlockStmt
+
+
+class While(common.While[Stmt, Expr], Stmt):
+    """
+    While loop with a field or scalar expression as condition.
+
+    No special rules apply.
+    """
+
+    @validator("body")
+    def verify_no_accumulated_extents(cls, body: List[Stmt]) -> List[Stmt]:
+        offset_reads = set()
+        field_writes = set()
+        for stmt in body:
+            field_writes |= stmt.iter_tree().if_isinstance(FieldAccess).getattr("name").to_set()
+            offset_reads |= (
+                stmt.iter_tree()
+                .if_isinstance(FieldAccess)
+                .filter(lambda acc: acc.offset.i != 0 or acc.offset.j != 0)
+                .getattr("name")
+                .to_set()
+            )
+        if field_writes.intersection(offset_reads):
+            raise ValueError("Field written with read offsets in while loop")
+        return body
+
+
 class UnaryOp(common.UnaryOp[Expr], Expr):
     pass
 
@@ -188,6 +220,20 @@ class FieldDecl(Decl):
 
 class ScalarDecl(Decl):
     pass
+
+
+class AxisIndex(Expr):
+    axis: str
+    dtype = common.DataType.INT32
+    kind = common.ExprKind.SCALAR
+
+
+class For(Stmt):
+    target: ScalarDecl
+    start: Union[Expr, AxisBound]
+    end: Union[Expr, AxisBound]
+    inc: int
+    body: List[Stmt]
 
 
 class Interval(LocNode):

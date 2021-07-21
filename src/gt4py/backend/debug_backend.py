@@ -172,19 +172,11 @@ class DebugSourceGenerator(PythonSourceGenerator):
             body_sources.dedent()
         return ["".join([str(item) for item in line]) for line in body_sources.lines]
 
-    def visit_While(self, node: gt_ir.While):
-        body_sources = gt_text.TextBlock()
-        body_sources.append("while {condition}:".format(condition=self.visit(node.condition)))
-        body_sources.indent()
-        for stmt in node.body.stmts:
-            body_sources.extend(self.visit(stmt))
-        return body_sources.text
-
     def _make_base_offset(self, bound: gt_ir.AxisBound, index: int) -> str:
         if bound.level == gt_ir.LevelMarker.START:
             return "{:d}".format(bound.offset)
         else:
-            return "{:s}[:d] {:+d}".format(self.domain_arg_name, index, bound.offset)
+            return "{:s}[{:d}] {:+d}".format(self.domain_arg_name, index, bound.offset)
 
     def _create_horizontal_conditional(
         self, axis_name: str, index: int, interval: gt_ir.AxisInterval
@@ -220,6 +212,14 @@ class DebugSourceGenerator(PythonSourceGenerator):
             source.extend(self.visit(stmt))
 
         return ["".join([str(item) for item in line]) for line in source.lines]
+
+    def visit_While(self, node: gt_ir.While):
+        body_sources = gt_text.TextBlock()
+        body_sources.append("while {condition}:".format(condition=self.visit(node.condition)))
+        body_sources.indent()
+        for stmt in node.body.stmts:
+            body_sources.extend(self.visit(stmt))
+        return body_sources.text
 
 
 class DebugModuleGenerator(BaseModuleGenerator):

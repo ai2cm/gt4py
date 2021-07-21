@@ -14,8 +14,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from dataclasses import dataclass, field
-from typing import Any, List
+from typing import Any, List, Union
 
 from eve import NodeTranslator
 from gtc import gtir, oir
@@ -44,7 +43,6 @@ def _create_mask(ctx: "GTIRToOIR.Context", name: str, cond: oir.Expr) -> oir.Tem
 
 
 class GTIRToOIR(NodeTranslator):
-    @dataclass
     class Context:
         """
         Context for Stmts.
@@ -54,8 +52,17 @@ class GTIRToOIR(NodeTranslator):
         they attach their result to the Context object.
         """
 
-        decls: List = field(default_factory=list)
-        horizontal_executions: List = field(default_factory=list)
+        def __init__(self):
+            self.decls: List[oir.Decl] = []
+            self.horizontal_executions: List[List[oir.HorizontalExecution]] = [[]]
+            self.in_while_loop: bool = False
+
+        def new_scope(self) -> "GTIRToOIR.Context":
+            self.horizontal_executions.append([])
+            return self
+
+        def get_horizontal_executions(self) -> List[oir.HorizontalExecution]:
+            return self.horizontal_executions.pop()
 
         def add_decl(self, decl: oir.Decl) -> "GTIRToOIR.Context":
             self.decls.append(decl)
@@ -64,21 +71,28 @@ class GTIRToOIR(NodeTranslator):
         def add_horizontal_execution(
             self, horizontal_execution: oir.HorizontalExecution
         ) -> "GTIRToOIR.Context":
-            self.horizontal_executions.append(horizontal_execution)
+            if not self.horizontal_executions:
+                self.new_scope()
+            self.horizontal_executions[-1].append(horizontal_execution)
             return self
 
     def visit_ParAssignStmt(
         self, node: gtir.ParAssignStmt, *, mask: oir.Expr = None, ctx: Context, **kwargs: Any
-    ) -> None:
-        body = [oir.AssignStmt(left=self.visit(node.left), right=self.visit(node.right))]
-        if mask is not None:
-            body = [oir.MaskStmt(body=body, mask=mask)]
-        ctx.add_horizontal_execution(
-            oir.HorizontalExecution(
-                body=body,
-                declarations=[],
-            ),
-        )
+    ) -> Union[None, oir.AssignStmt]:
+        stmt = oir.AssignStmt(left=self.visit(node.left), right=self.visit(node.right))
+        if not kwargs.get("retstmt", False):
+            if mask is not None:
+                # Wrap inside MaskStmt
+                stmt = oir.MaskStmt(body=[stmt], mask=mask, is_loop=ctx.in_while_loop)
+            ctx.add_horizontal_execution(
+                oir.HorizontalExecution(
+                    body=[stmt],
+                    declarations=[],
+                ),
+            )
+            return None
+        else:
+            return stmt
 
     def visit_FieldAccess(self, node: gtir.FieldAccess, **kwargs: Any) -> oir.FieldAccess:
         return oir.FieldAccess(
@@ -130,7 +144,7 @@ class GTIRToOIR(NodeTranslator):
         combined_mask = current_mask
         if mask:
             combined_mask = oir.BinaryOp(op=LogicalOperator.AND, left=mask, right=combined_mask)
-        self.visit(node.true_branch.body, mask=combined_mask, ctx=ctx)
+        self.visit(node.true_branch.body, ctx=ctx, mask=combined_mask)
 
         if node.false_branch:
             combined_mask = oir.UnaryOp(op=UnaryOperator.NOT, expr=current_mask)
@@ -138,8 +152,8 @@ class GTIRToOIR(NodeTranslator):
                 combined_mask = oir.BinaryOp(op=LogicalOperator.AND, left=mask, right=combined_mask)
             self.visit(
                 node.false_branch.body,
-                mask=combined_mask,
                 ctx=ctx,
+                mask=combined_mask,
             )
 
     # For now we represent ScalarIf (and FieldIf) both as masks on the HorizontalExecution.
@@ -152,16 +166,42 @@ class GTIRToOIR(NodeTranslator):
         if mask:
             combined_mask = oir.BinaryOp(op=LogicalOperator.AND, left=mask, right=current_mask)
 
-        self.visit(node.true_branch.body, mask=combined_mask, ctx=ctx)
+        self.visit(node.true_branch.body, ctx=ctx, mask=combined_mask)
         if node.false_branch:
             combined_mask = oir.UnaryOp(op=UnaryOperator.NOT, expr=current_mask)
             if mask:
                 combined_mask = oir.BinaryOp(op=LogicalOperator.AND, left=mask, right=combined_mask)
             self.visit(
                 node.false_branch.body,
-                mask=combined_mask,
                 ctx=ctx,
+                mask=combined_mask,
             )
+
+    def visit_HorizontalMask(self, node: gtir.HorizontalMask) -> oir.HorizontalMask:
+        return oir.HorizontalMask(i=node.i, j=node.j)
+
+    def visit_HorizontalRegion(
+        self, node: gtir.HorizontalRegion, *, mask: oir.Expr = None, ctx: Context, **kwargs: Any
+    ) -> None:
+        current_mask = self.visit(node.mask)
+        combined_mask = (
+            oir.BinaryOf(op=LogicalOperator.AND, left=mask, right=current_mask)
+            if mask
+            else current_mask
+        )
+        return self.visit(node.block.body, mask=combined_mask, ctx=ctx)
+
+    def visit_While(
+        self, node: gtir.ScalarIfStmt, *, mask: oir.Expr = None, ctx: Context, **kwargs: Any
+    ) -> None:
+        current_mask = self.visit(node.cond)
+        combined_mask = current_mask
+        if mask:
+            combined_mask = oir.BinaryOp(op=LogicalOperator.AND, left=mask, right=current_mask)
+
+        ctx.in_while_loop = True
+        self.visit(node.body, mask=combined_mask, ctx=ctx)
+        ctx.in_while_loop = False
 
     def visit_Interval(self, node: gtir.Interval, **kwargs: Any) -> oir.Interval:
         return oir.Interval(
@@ -172,7 +212,6 @@ class GTIRToOIR(NodeTranslator):
     def visit_VerticalLoop(
         self, node: gtir.VerticalLoop, *, ctx: Context, **kwargs: Any
     ) -> oir.VerticalLoop:
-        ctx.horizontal_executions.clear()
         self.visit(node.body, ctx=ctx)
 
         for temp in node.temporaries:
@@ -185,7 +224,7 @@ class GTIRToOIR(NodeTranslator):
             sections=[
                 oir.VerticalLoopSection(
                     interval=self.visit(node.interval, **kwargs),
-                    horizontal_executions=ctx.horizontal_executions,
+                    horizontal_executions=ctx.get_horizontal_executions(),
                 )
             ],
             caches=[],
@@ -193,9 +232,29 @@ class GTIRToOIR(NodeTranslator):
 
     def visit_Stencil(self, node: gtir.Stencil, **kwargs: Any) -> oir.Stencil:
         ctx = self.Context()
+        vertical_loops = self.visit(node.vertical_loops, ctx=ctx)
         return oir.Stencil(
             name=node.name,
             params=self.visit(node.params),
-            vertical_loops=self.visit(node.vertical_loops, ctx=ctx),
+            vertical_loops=vertical_loops,
             declarations=ctx.decls,
+        )
+
+    def visit_AxisIndex(self, node: gtir.AxisIndex) -> oir.AxisIndex:
+        return oir.AxisIndex(axis=node.axis)
+
+    def visit_For(self, node: gtir.For, ctx: Context, **kwargs: Any) -> None:
+        ctx.add_horizontal_execution(
+            oir.HorizontalExecution(
+                body=[
+                    oir.For(
+                        target_name=node.target.name,
+                        start=self.visit(node.start, **kwargs),
+                        end=self.visit(node.end, **kwargs),
+                        inc=node.inc,
+                        body=self.visit(node.body, ctx=ctx, retstmt=True, **kwargs),
+                    )
+                ],
+                declarations=[oir.LocalScalar(name=node.target.name, dtype=node.target.dtype)],
+            )
         )

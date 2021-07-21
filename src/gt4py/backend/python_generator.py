@@ -266,7 +266,7 @@ class PythonSourceGenerator(gt_ir.IRNodeVisitor):
         self.block_info.symbols = node.local_symbols
 
         self.block_info.variable_koffsets = set()
-        for ref_node in gt_ir.filter_nodes_dfs(node, gt_ir.FieldRef):
+        for ref_node in gt_ir.iter_nodes_of_type(node, gt_ir.FieldRef):
             if isinstance(ref_node.offset.get(self.domain.sequential_axis.name, None), gt_ir.Expr):
                 self.block_info.variable_koffsets.add(ref_node.name)
 
@@ -279,6 +279,7 @@ class PythonSourceGenerator(gt_ir.IRNodeVisitor):
         self.block_info.accessors = {accessor.symbol for accessor in node.accessors}
         self.block_info.iteration_order = iteration_order
         self.block_info.extent = node.compute_extent
+        self.block_info.explicit_K_loop = iteration_order != gt_ir.IterationOrder.PARALLEL
         self.var_refs_defined.clear()
 
         # Create regions and computations

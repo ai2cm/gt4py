@@ -73,11 +73,23 @@ class GTCppCodegen(codegen.TemplatedGenerator):
 
     AssignStmt = as_fmt("{left} = {right};")
 
-    AccessorRef = as_fmt("eval({name}({', '.join([offset, *data_index])}))")
+    def visit_AccessorRef(self, accessor_ref: gtcpp.AccessorRef, **kwargs):
+        offset = accessor_ref.offset
+        if offset.i == offset.j == offset.k == 0 and not accessor_ref.data_index:
+            # Skip offsets in the accessor if possible, improves generated code readability and reduces code size for point-wise computations significantly
+            return f"eval({accessor_ref.name}())"
+        offset_k = (
+            self.visit(offset.k, **kwargs)
+            if isinstance(offset, gtcpp.VariableOffset)
+            else f"{offset.k}"
+        )
+        return (
+            f"eval({accessor_ref.name}({offset.i}, {offset.j}, {offset_k}"
+            + "".join(f", {self.visit(d)}" for d in accessor_ref.data_index)
+            + "))"
+        )
 
-    ScalarAccess = as_fmt("{name}")
-
-    CartesianOffset = as_fmt("{i}, {j}, {k}")
+    LocalAccess = as_fmt("{name}")
 
     BinaryOp = as_fmt("({left} {op} {right})")
 
@@ -86,6 +98,21 @@ class GTCppCodegen(codegen.TemplatedGenerator):
     TernaryOp = as_fmt("({cond} ? {true_expr} : {false_expr})")
 
     Cast = as_fmt("static_cast<{dtype}>({expr})")
+
+    Positional = as_fmt("positional<dim::{dim}>()")
+
+    AxisEndpoint = as_fmt(
+        "gridtools::stencil::make_global_parameter(static_cast<gridtools::int_t>(domain[{axis}]))"
+    )
+
+    Binding = as_fmt("auto {name} = {expr};")
+
+    def visit_For(self, node: gtcpp.For, **kwargs):
+        op = "<" if node.inc > 0 else ">"
+        start = self.visit(node.start, **kwargs)
+        end = self.visit(node.end, **kwargs)
+        body = self.visit(node.body, **kwargs)
+        return f"for({node.target_name} = {start}; {node.target_name} {op} {end}; {node.target_name} += {node.inc}) {body}"
 
     def visit_BuiltInLiteral(self, builtin: BuiltInLiteral, **kwargs: Any) -> str:
         if builtin == BuiltInLiteral.TRUE:
@@ -155,8 +182,6 @@ class GTCppCodegen(codegen.TemplatedGenerator):
 
     Arg = as_fmt("{name}")
 
-    Param = as_fmt("{name}")
-
     ApiParamDecl = as_fmt("{name}")
 
     GTStage = as_mako(".stage(${functor}(), ${','.join(args)})")
@@ -185,6 +210,8 @@ class GTCppCodegen(codegen.TemplatedGenerator):
         """
     )
 
+    While = as_mako("while(${cond}) {${''.join(body)}}")
+
     BlockStmt = as_mako("{${''.join(body)}}")
 
     def visit_GTComputationCall(
@@ -201,10 +228,11 @@ class GTCppCodegen(codegen.TemplatedGenerator):
                 axis_config::offset_limit<${offset_limit}>>{domain[2]});
 
             auto ${ computation_name } = [](${ ','.join('auto ' + a for a in arguments) }) {
-
                 ${ '\\n'.join(temporaries) }
                 return multi_pass(${ ','.join(multi_stages) });
             };
+
+            ${'\\n'.join(extra_decls)}
 
             run(${computation_name}, ${gt_backend_t}<>{}, grid, ${','.join(f"std::forward<decltype({arg})>({arg})" for arg in arguments)});
         }
@@ -216,6 +244,8 @@ class GTCppCodegen(codegen.TemplatedGenerator):
         """
         #include <gridtools/stencil/${gt_backend_t}.hpp>
         #include <gridtools/stencil/cartesian.hpp>
+        #include <gridtools/stencil/positional.hpp>
+        #include <gridtools/stencil/global_parameter.hpp>
 
         namespace ${ name }_impl_{
             using Domain = std::array<gridtools::uint_t, 3>;

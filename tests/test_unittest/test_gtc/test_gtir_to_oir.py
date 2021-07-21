@@ -18,15 +18,17 @@ from typing import Type
 
 from eve import Node
 from gtc import gtir, gtir_to_oir, oir
-from gtc.common import DataType
+from gtc.common import ComparisonOperator, DataType
 from gtc.gtir_to_oir import GTIRToOIR
 
 from . import oir_utils
 from .gtir_utils import (
+    BinaryOpFactory,
     BlockStmtFactory,
     FieldAccessFactory,
     FieldIfStmtFactory,
     ScalarIfStmtFactory,
+    WhileFactory,
 )
 
 
@@ -47,7 +49,7 @@ def test_visit_ParAssignStmt():
     result_horizontal_executions = ctx.horizontal_executions
 
     assert len(result_horizontal_executions) == 1
-    assign = isinstance_and_return(result_horizontal_executions[0].body[0], oir.AssignStmt)
+    assign = isinstance_and_return(result_horizontal_executions[0][0].body[0], oir.AssignStmt)
 
     left = isinstance_and_return(assign.left, oir.FieldAccess)
     right = isinstance_and_return(assign.right, oir.FieldAccess)
@@ -60,7 +62,7 @@ def test_create_mask():
     cond = oir_utils.FieldAccessFactory(dtype=DataType.BOOL)
     ctx = GTIRToOIR.Context()
     result_decl = gtir_to_oir._create_mask(ctx, mask_name, cond)
-    result_assign = ctx.horizontal_executions[0]
+    result_assign = ctx.horizontal_executions[0][0]
 
     assert isinstance(result_decl, oir.Temporary)
     assert result_decl.name == mask_name
@@ -92,4 +94,11 @@ def test_visit_FieldIfStmt_nesting():
 
 def test_visit_ScalarIfStmt():
     testee = ScalarIfStmtFactory()
+    GTIRToOIR().visit(testee, ctx=GTIRToOIR.Context())
+
+
+def test_visit_While():
+    testee = WhileFactory(
+        cond=BinaryOpFactory(left__name="foo", right__name="bar", op=ComparisonOperator.LT),
+    )
     GTIRToOIR().visit(testee, ctx=GTIRToOIR.Context())

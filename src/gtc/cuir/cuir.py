@@ -18,27 +18,19 @@ from typing import Any, List, Optional, Tuple, Union
 
 from pydantic import validator
 
-from eve import Str, SymbolName, SymbolTableTrait
+from eve import Str, SymbolName, SymbolTableTrait, field, utils
 from gtc import common
 from gtc.common import AxisBound, CartesianOffset, DataType, LocNode, LoopOrder
 
 
+@utils.noninstantiable
 class Expr(common.Expr):
     dtype: common.DataType
 
-    # TODO Eve could provide support for making a node abstract
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if type(self) is Expr:
-            raise TypeError("Trying to instantiate `Expr` abstract class.")
-        super().__init__(*args, **kwargs)
 
-
+@utils.noninstantiable
 class Stmt(common.Stmt):
-    # TODO Eve could provide support for making a node abstract
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if type(self) is Stmt:
-            raise TypeError("Trying to instantiate `Stmt` abstract class.")
-        super().__init__(*args, **kwargs)
+    pass
 
 
 class Literal(common.Literal, Expr):  # type: ignore
@@ -62,6 +54,12 @@ class IJCacheAccess(common.FieldAccess, Expr):
             raise ValueError("No k-offset allowed")
         return v
 
+    @validator("data_index")
+    def no_additional_dimensions(cls, v: List[int]) -> List[int]:
+        if v:
+            raise ValueError("IJ-cached higher-dimensional fields are not supported")
+        return v
+
 
 class KCacheAccess(common.FieldAccess, Expr):
     k_cache_is_different_from_field_access = True
@@ -70,6 +68,12 @@ class KCacheAccess(common.FieldAccess, Expr):
     def zero_ij_offset(cls, v: CartesianOffset) -> CartesianOffset:
         if not v.i == v.j == 0:
             raise ValueError("No ij-offset allowed")
+        return v
+
+    @validator("data_index")
+    def no_additional_dimensions(cls, v: List[int]) -> List[int]:
+        if v:
+            raise ValueError("K-cached higher-dimensional fields are not supported")
         return v
 
 
@@ -82,6 +86,7 @@ class AssignStmt(
 class MaskStmt(Stmt):
     mask: Expr
     body: List[Stmt]
+    is_loop: bool = False
 
 
 class UnaryOp(common.UnaryOp[Expr], Expr):
@@ -97,6 +102,10 @@ class TernaryOp(common.TernaryOp[Expr], Expr):
 
 
 class Cast(common.Cast[Expr], Expr):  # type: ignore
+    pass
+
+
+class VariableOffset(common.VariableOffset):
     pass
 
 
@@ -116,6 +125,7 @@ class Decl(LocNode):
 
 class FieldDecl(Decl):
     dimensions: Tuple[bool, bool, bool]
+    data_dims: Tuple[int, ...] = field(default_factory=tuple)
 
 
 class ScalarDecl(Decl):
@@ -130,29 +140,8 @@ class Temporary(Decl):
     pass
 
 
-class IJExtent(LocNode):
-    i: Tuple[int, int]
-    j: Tuple[int, int]
-
-    @classmethod
-    def zero(cls) -> "IJExtent":
-        return cls(i=(0, 0), j=(0, 0))
-
-    @classmethod
-    def from_offset(cls, offset: CartesianOffset) -> "IJExtent":
-        return cls(i=(offset.i, offset.i), j=(offset.j, offset.j))
-
-    def union(*extents: "IJExtent") -> "IJExtent":
-        return IJExtent(
-            i=(min(e.i[0] for e in extents), max(e.i[1] for e in extents)),
-            j=(min(e.j[0] for e in extents), max(e.j[1] for e in extents)),
-        )
-
-    def __add__(self, other: "IJExtent") -> "IJExtent":
-        return IJExtent(
-            i=(self.i[0] + other.i[0], self.i[1] + other.i[1]),
-            j=(self.j[0] + other.j[0], self.j[1] + other.j[1]),
-        )
+class IJExtent(common.IJExtent):
+    pass
 
 
 class KExtent(LocNode):
@@ -164,7 +153,8 @@ class KExtent(LocNode):
 
     @classmethod
     def from_offset(cls, offset: CartesianOffset) -> "KExtent":
-        return cls(k=(offset.k, offset.k))
+        k_offset = offset.to_dict()["k"]
+        return cls(k=(k_offset, k_offset))
 
     def union(*extents: "KExtent") -> "KExtent":
         return KExtent(k=(min(e.k[0] for e in extents), max(e.k[1] for e in extents)))

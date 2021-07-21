@@ -216,7 +216,9 @@ class InitInfoPass(TransformPass):
 
         def visit_Decl(self, node: gt_ir.FieldDecl):
             self._add_symbol(node)
-            return None
+
+        def visit_For(self, node: gt_ir.For):
+            self._add_symbol(node.target, is_counter=True)
 
         def visit_BlockStmt(self, node: gt_ir.BlockStmt):
             result = [self.visit(stmt) for stmt in node.stmts]
@@ -231,11 +233,11 @@ class InitInfoPass(TransformPass):
             for computation in node.computations:
                 self.visit(computation)
 
-        def _add_symbol(self, decl):
+        def _add_symbol(self, decl, *, is_counter=False):
             has_redundancy = (
                 isinstance(decl, gt_ir.FieldDecl) and self.redundant_temp_fields and not decl.is_api
             )
-            symbol_info = SymbolInfo(decl, has_redundancy=has_redundancy)
+            symbol_info = SymbolInfo(decl, has_redundancy=has_redundancy, is_counter=is_counter)
             self.data.symbols[decl.name] = symbol_info
 
     class BlockMaker(gt_ir.IRNodeVisitor):
@@ -329,6 +331,23 @@ class InitInfoPass(TransformPass):
 
             return result
 
+        def visit_HorizontalIf(self, node: gt_ir.HorizontalIf):
+            body_info = self.visit(node.body)
+            result = StatementInfo(
+                self.data.id_generator.new, node, body_info.inputs, body_info.outputs
+            )
+
+            return result
+
+        def visit_For(self, node: gt_ir.For):
+            body_stmt_info = self.visit(node.body)
+            inputs = self._merge_extents(
+                list((k, v) for k, v in body_stmt_info.inputs.items() if k != node.target.name)
+            )
+            result = StatementInfo(self.data.id_generator.new, node, inputs, body_stmt_info.outputs)
+
+            return result
+
         def visit_While(self, node: gt_ir.While) -> StatementInfo:
             body_stmt_info = self.visit(node.body)
             condition_input_extents = self.visit(node.condition)
@@ -341,24 +360,13 @@ class InitInfoPass(TransformPass):
 
             return result
 
-        def visit_HorizontalIf(self, node: gt_ir.HorizontalIf):
-            body_info = self.visit(node.body)
-            result = StatementInfo(
-                self.data.id_generator.new, node, body_info.inputs, body_info.outputs
-            )
-
-            return result
-
         def visit_BlockStmt(self, node: gt_ir.BlockStmt):
             inputs = {}
             outputs = set()
             for stmt in node.stmts:
                 stmt_info = self.visit(stmt)
-                if stmt_info:
-                    inputs = self._merge_extents(
-                        list(inputs.items()) + list(stmt_info.inputs.items())
-                    )
-                    outputs |= stmt_info.outputs
+                inputs = self._merge_extents(list(inputs.items()) + list(stmt_info.inputs.items()))
+                outputs |= stmt_info.outputs
 
             result = StatementInfo(self.data.id_generator.new, node, inputs, outputs)
 
@@ -667,10 +675,6 @@ class MultiStageMergingWrapper:
     def domain(self) -> gt_ir.Domain:
         return self.parent.definition_ir.domain
 
-    @property
-    def domain(self) -> gt_ir.Domain:
-        return self.parent.definition_ir.domain
-
 
 class StageMergingWrapper:
     """Wrapper for :class:`IJBlockInfo` containing the logic required to merge or not merge."""
@@ -881,10 +885,6 @@ class StageMergingWrapper:
     def domain(self) -> gt_ir.Domain:
         return self.parent.definition_ir.domain
 
-    @property
-    def domain(self) -> gt_ir.Domain:
-        return self.parent.definition_ir.domain
-
 
 def greedy_merging(items: Sequence[MergeableType]) -> List[MergeableType]:
     if len(items) < 2:
@@ -1006,9 +1006,6 @@ class RemoveUnreachedStatementsPass(TransformPass):
 
 class ComputeExtentsPass(TransformPass):
     """Loop over blocks backwards and accumulate extents.
-
-    This includes computing extents for the HorizontalIf blocks, and marking these
-    for deletion if they are unused.
 
     Note
     ----
@@ -1205,6 +1202,10 @@ class ComputeUsedSymbolsPass(TransformPass):
                 self.visit(sequential_offset)
             self.data.symbols[node.name].in_use = True
 
+        def visit_For(self, node: gt_ir.For, **kwargs):
+            self.data.symbols[node.target.name].in_use = True
+            self.visit(node.body)
+
     @classmethod
     def apply(cls, transform_data: TransformData) -> None:
         visitor = cls.ComputeUsedVisitor(transform_data)
@@ -1252,7 +1253,12 @@ class BuildIIRPass(TransformPass):
 
             decl = symbol.decl
             if isinstance(decl, gt_ir.VarDecl):
-                self.iir.parameters[name] = decl
+                if not symbol.is_counter:
+                    self.iir.parameters[name] = decl
+                else:
+                    # Counters are local symbols only and backends
+                    # handle declaration and initialization.
+                    pass
             else:
                 self.iir.fields[name] = decl
 
@@ -1289,6 +1295,10 @@ class BuildIIRPass(TransformPass):
                         local_symbols[decl.name] = decl
                 else:
                     stmts.append(stmt_info.stmt)
+                    if isinstance(stmt_info.stmt, gt_ir.For):
+                        # Add the target decl
+                        decl = stmt_info.stmt.target
+                        local_symbols[decl.name] = decl
 
             apply_block = gt_ir.ApplyBlock(
                 interval=self._make_axis_interval(int_block.interval),
@@ -1301,16 +1311,17 @@ class BuildIIRPass(TransformPass):
         accessors = []
         remaining_outputs = set(ij_block.outputs)
         for name, extent in ij_block.inputs.items():
+            intent = gt_definitions.AccessKind.READ
             if name in remaining_outputs:
-                read_write = True
+                intent |= gt_definitions.AccessKind.WRITE
                 remaining_outputs.remove(name)
                 extent |= Extent.zeros()
-            else:
-                read_write = False
-            accessors.append(self._make_accessor(name, extent, read_write))
+            accessors.append(self._make_accessor(name, extent, intent))
         zero_extent = Extent.zeros(self.data.ndims)
         for name in remaining_outputs:
-            accessors.append(self._make_accessor(name, zero_extent, True))
+            accessors.append(
+                self._make_accessor(name, zero_extent, gt_definitions.AccessKind.WRITE)
+            )
 
         stage = gt_ir.Stage(
             name="stage__{}".format(ij_block.id),
@@ -1334,15 +1345,14 @@ class BuildIIRPass(TransformPass):
 
         return result
 
-    def _make_accessor(self, name, extent, read_write: bool) -> gt_ir.Accessor:
+    def _make_accessor(self, name, extent, intent: gt_definitions.AccessKind) -> gt_ir.Accessor:
         assert name in self.data.symbols
-        intent = gt_ir.AccessIntent.READ_WRITE if read_write else gt_ir.AccessIntent.READ_ONLY
         if self.data.symbols[name].is_field:
             assert extent is not None
             result = gt_ir.FieldAccessor(symbol=name, intent=intent, extent=extent)
         else:
             # assert extent is None and not read_write
-            assert not read_write
+            assert intent != gt_definitions.AccessKind.READ_WRITE
             result = gt_ir.ParameterAccessor(symbol=name)
 
         return result
@@ -1372,11 +1382,6 @@ class DemoteLocalTemporariesToVariablesPass(TransformPass):
 
     This may occur because these can be local variables in the scope, and
     therefore do not need to be fields.
-
-    A field can be demoted when it is a temporary field that:
-    1. is never used with an offset,
-    2. is never read before assigned to in any stage, and
-    3. is never used in a horizontal region
     """
 
     class CollectDemotableSymbols(gt_ir.IRNodeVisitor):
@@ -1392,40 +1397,35 @@ class DemoteLocalTemporariesToVariablesPass(TransformPass):
             }
             """Dictionary mapping temporaries to their most recently referenced stage."""
             self.visit(node)
-
             return set(self.demotables.keys())
 
         def visit_Stage(self, node: gt_ir.Stage, **kwargs: Any) -> None:
-            self.generic_visit(node, **kwargs, stage_name=node.name, is_write=False)
+            kwargs["stage_name"] = node.name
+            self.generic_visit(node, **kwargs)
 
         def visit_Assign(self, node: gt_ir.Assign, **kwargs: Any) -> None:
-            kwargs["is_write"] = False
             self.visit(node.value, **kwargs)
-            kwargs["is_write"] = True
-            self.visit(node.target, **kwargs)
+            if kwargs.get("inside_horizontal_if", False):
+                self.demotables.pop(node.target.name, None)
+            elif node.target.name in self.demotables:
+                self.demotables[node.target.name] = kwargs["stage_name"]
 
-        def visit_HorizontalIf(self, node: gt_ir.HorizontalIf, **kwargs) -> None:
+        def visit_HorizontalIf(self, node: gt_ir.HorizontalIf, **kwargs: Any) -> None:
             self.visit(node.body, inside_horizontal_if=True, **kwargs)
 
+        def visit_For(self, node: gt_ir.For, **kwargs: Any) -> None:
+            self.visit(node.body, **kwargs)
+
         def visit_FieldRef(self, node: gt_ir.FieldRef, **kwargs: Any) -> None:
-            if node.name in self.demotables:
-                not_demotable = False
-                if not kwargs["is_write"]:
-                    # 1. is never used with an offset
-                    not_demotable = any(val != 0 for val in node.offset.values())
-
-                    # 2. is never read before assigned to in any stage
-                    not_demotable = (
-                        not_demotable or kwargs["stage_name"] != self.demotables[node.name]
-                    )
-                else:
-                    self.demotables[node.name] = kwargs["stage_name"]
-
-                if not_demotable:
-                    self.demotables.pop(node.name)
-                elif kwargs.get("inside_horizontal_if", False):
-                    # 3. is never used in a horizontal region
-                    self.demotables.pop(node.name)
+            field_name = node.name
+            if field_name in self.demotables:
+                assert self.demotables[field_name], f"Temporary {field_name} has no stage."
+                if (
+                    kwargs["stage_name"] != self.demotables[field_name]
+                    or any(val != 0 for val in node.offset.values())
+                    or kwargs.get("inside_horizontal_if", False)
+                ):
+                    self.demotables.pop(field_name)
 
     class DemoteSymbols(gt_ir.IRNodeMapper):
         @classmethod
@@ -1732,7 +1732,7 @@ class HousekeepingPass(TransformPass):
             if (
                 any(
                     isinstance(a, gt_ir.FieldAccessor)
-                    and (a.intent is gt_ir.AccessIntent.READ_WRITE)
+                    and bool(a.intent & gt_definitions.AccessKind.WRITE)
                     for a in node.accessors
                 )
                 and node.apply_blocks

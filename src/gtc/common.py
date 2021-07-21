@@ -15,8 +15,22 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import enum
-from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, cast
+from typing import (
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    Generic,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+)
 
+import numpy as np
 import pydantic
 from pydantic import validator
 from pydantic.class_validators import root_validator
@@ -32,6 +46,7 @@ from eve import (
     SymbolTableTrait,
 )
 from eve import exceptions as eve_exceptions
+from eve import utils
 from eve.type_definitions import SymbolRef
 from eve.typingx import RootValidatorType, RootValidatorValuesType
 from gtc.utils import dimension_flags_to_names, flatten_list
@@ -170,26 +185,29 @@ class NativeFunction(StrEnum):
 
 
 NativeFunction.IR_OP_TO_NUM_ARGS = {
-    NativeFunction.ABS: 1,
-    NativeFunction.MIN: 2,
-    NativeFunction.MAX: 2,
-    NativeFunction.MOD: 2,
-    NativeFunction.SIN: 1,
-    NativeFunction.COS: 1,
-    NativeFunction.TAN: 1,
-    NativeFunction.ARCSIN: 1,
-    NativeFunction.ARCCOS: 1,
-    NativeFunction.ARCTAN: 1,
-    NativeFunction.SQRT: 1,
-    NativeFunction.POW: 2,
-    NativeFunction.EXP: 1,
-    NativeFunction.LOG: 1,
-    NativeFunction.ISFINITE: 1,
-    NativeFunction.ISINF: 1,
-    NativeFunction.ISNAN: 1,
-    NativeFunction.FLOOR: 1,
-    NativeFunction.CEIL: 1,
-    NativeFunction.TRUNC: 1,
+    NativeFunction(f): v  # instead of noqa on every line
+    for f, v in {
+        NativeFunction.ABS: 1,
+        NativeFunction.MIN: 2,
+        NativeFunction.MAX: 2,
+        NativeFunction.MOD: 2,
+        NativeFunction.SIN: 1,
+        NativeFunction.COS: 1,
+        NativeFunction.TAN: 1,
+        NativeFunction.ARCSIN: 1,
+        NativeFunction.ARCCOS: 1,
+        NativeFunction.ARCTAN: 1,
+        NativeFunction.SQRT: 1,
+        NativeFunction.POW: 2,
+        NativeFunction.EXP: 1,
+        NativeFunction.LOG: 1,
+        NativeFunction.ISFINITE: 1,
+        NativeFunction.ISINF: 1,
+        NativeFunction.ISNAN: 1,
+        NativeFunction.FLOOR: 1,
+        NativeFunction.CEIL: 1,
+        NativeFunction.TRUNC: 1,
+    }.items()
 }
 
 
@@ -209,6 +227,7 @@ class LocNode(Node):
     loc: Optional[SourceLocation]
 
 
+@utils.noninstantiable
 class Expr(LocNode):
     """
     Expression base class.
@@ -221,19 +240,10 @@ class Expr(LocNode):
     dtype: Optional[DataType]
     kind: ExprKind
 
-    # TODO Eve could provide support for making a node abstract
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if type(self) is Expr:
-            raise TypeError("Trying to instantiate `Expr` abstract class.")
-        super().__init__(*args, **kwargs)
 
-
+@utils.noninstantiable
 class Stmt(LocNode):
-    # TODO Eve could provide support for making a node abstract
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if type(self) is Stmt:
-            raise TypeError("Trying to instantiate `Stmt` abstract class.")
-        super().__init__(*args, **kwargs)
+    pass
 
 
 def verify_condition_is_boolean(parent_node_cls: Node, cond: Expr) -> Expr:
@@ -298,6 +308,23 @@ class CartesianOffset(Node):
     def to_dict(self) -> Dict[str, int]:
         return {"i": self.i, "j": self.j, "k": self.k}
 
+    def is_zero(self) -> bool:
+        return all(x == 0 for x in self.to_dict().values())
+
+
+class VariableOffset(CartesianOffset):
+    k: Expr
+    LARGE_NUM: ClassVar[int] = 10000
+
+    def to_dict(self) -> Dict[str, int]:
+        return {"i": self.i, "j": self.j, "k": self.LARGE_NUM}
+
+    @validator("k")
+    def integer_k_offset(cls, k: Expr) -> Expr:
+        if k and k.dtype not in (DataType.INT8, DataType.INT16, DataType.INT32, DataType.INT64):
+            raise ValueError("Variable k-offset must have an integer type")
+        return k
+
 
 class ScalarAccess(LocNode):
     name: SymbolRef
@@ -307,7 +334,7 @@ class ScalarAccess(LocNode):
 class FieldAccess(LocNode):
     name: SymbolRef
     offset: CartesianOffset
-    data_index: List[int] = []
+    data_index: List[Any] = []
     kind = ExprKind.FIELD
 
     @classmethod
@@ -315,8 +342,8 @@ class FieldAccess(LocNode):
         return cls(name=name, loc=loc, offset=CartesianOffset.zero())
 
     @validator("data_index")
-    def nonnegative_data_index(cls, data_index: List[int]) -> List[int]:
-        if data_index and any(index < 0 for index in data_index):
+    def nonnegative_data_index(cls, data_index: List[Any]) -> List[Any]:
+        if data_index and any(isinstance(index, int) and index < 0 for index in data_index):
             raise ValueError("Data indices must be nonnegative")
         return data_index
 
@@ -335,6 +362,21 @@ class IfStmt(GenericNode, Generic[StmtT, ExprT]):
     cond: ExprT
     true_branch: StmtT
     false_branch: Optional[StmtT]
+
+    @validator("cond")
+    def condition_is_boolean(cls, cond: Expr) -> Expr:
+        return verify_condition_is_boolean(cls, cond)
+
+
+class While(GenericNode, Generic[StmtT, ExprT]):
+    """
+    Generic while loop.
+
+    Verifies that `cond` is a boolean expr (if `dtype` is set).
+    """
+
+    cond: ExprT
+    body: List[StmtT]
 
     @validator("cond")
     def condition_is_boolean(cls, cond: Expr) -> Expr:
@@ -697,3 +739,155 @@ class AxisBound(Node):
     @classmethod
     def end(cls) -> "AxisBound":
         return cls.from_end(0)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, AxisBound):
+            return False
+        return self.level == other.level and self.offset == other.offset
+
+    def __lt__(self, other: "AxisBound") -> bool:
+        if not isinstance(other, AxisBound):
+            return NotImplemented
+        return (self.level == LevelMarker.START and other.level == LevelMarker.END) or (
+            self.level == other.level and self.offset < other.offset
+        )
+
+    def __le__(self, other: "AxisBound") -> bool:
+        if not isinstance(other, AxisBound):
+            return NotImplemented
+        return self < other or self == other
+
+    def __gt__(self, other: "AxisBound") -> bool:
+        if not isinstance(other, AxisBound):
+            return NotImplemented
+        return not self < other and not self == other
+
+    def __ge__(self, other: "AxisBound") -> bool:
+        if not isinstance(other, AxisBound):
+            return NotImplemented
+        return not self < other
+
+
+class IJExtent(LocNode):
+    i: Tuple[int, int]
+    j: Tuple[int, int]
+
+    @classmethod
+    def zero(cls) -> "IJExtent":
+        return cls(i=(0, 0), j=(0, 0))
+
+    @classmethod
+    def from_offset(cls, offset: CartesianOffset) -> "IJExtent":
+        return cls(i=(offset.i, offset.i), j=(offset.j, offset.j))
+
+    def union(*extents: "IJExtent") -> "IJExtent":
+        return IJExtent(
+            i=(min(e.i[0] for e in extents), max(e.i[1] for e in extents)),
+            j=(min(e.j[0] for e in extents), max(e.j[1] for e in extents)),
+        )
+
+    def _apply(self, other: "IJExtent", op: Callable[[int, int], int]) -> "IJExtent":
+        return IJExtent(
+            i=(op(self.i[0], other.i[0]), op(self.i[1], other.i[1])),
+            j=(op(self.j[0], other.j[0]), op(self.j[1], other.j[1])),
+        )
+
+    def __add__(self, other: "IJExtent") -> "IJExtent":
+        return self._apply(other, op=lambda x, y: x + y)
+
+    def __sub__(self, other: "IJExtent") -> "IJExtent":
+        return self._apply(other, op=lambda x, y: x - y)
+
+
+class HorizontalInterval(Node):
+    start: Optional[AxisBound]
+    end: Optional[AxisBound]
+
+    @root_validator
+    def check_start_before_end(cls, values: RootValidatorValuesType) -> RootValidatorValuesType:
+        def get_offset(bound: Optional[AxisBound], level) -> int:
+            DOMAIN_SIZE = 1000
+            OFFSET_SIZE = 1000
+
+            if not bound:
+                if level == LevelMarker.START:
+                    base_offset = 0
+                    factor = -1
+                else:
+                    base_offset = DOMAIN_SIZE
+                    factor = 1
+
+                if bound != level:
+                    raise ValueError(f"If LevelMarker, it must be {str(level)}")
+
+                offset = base_offset + factor * OFFSET_SIZE
+            else:
+                base_offset = 0 if bound.level == LevelMarker.START else DOMAIN_SIZE
+                offset = base_offset + bound.offset
+
+            return offset
+
+        start = get_offset(values["start"], LevelMarker.START)
+        end = get_offset(values["end"], LevelMarker.END)
+
+        if end <= start:
+            raise ValueError("Start must come strictly before end in an interval")
+
+        return values
+
+    @property
+    def is_single_index(self) -> bool:
+        if self.start is None or self.end is None or self.start.level != self.end.level:
+            return False
+
+        return abs(self.end.offset - self.start.offset) == 1
+
+
+class HorizontalMask(GenericNode, Generic[ExprT]):
+    i: HorizontalInterval
+    j: HorizontalInterval
+    kind = ExprKind.FIELD
+    dtype = DataType.BOOL
+
+    @property
+    def is_single_index(self) -> bool:
+        return self.i.is_single_index and self.j.is_single_index
+
+    @property
+    def intervals(self) -> Tuple[HorizontalInterval, HorizontalInterval]:
+        return (self.i, self.j)
+
+
+def data_type_to_typestr(dtype: DataType) -> str:
+
+    table = {
+        DataType.BOOL: "bool",
+        DataType.INT8: "int8",
+        DataType.INT16: "int16",
+        DataType.INT32: "int32",
+        DataType.INT64: "int64",
+        DataType.FLOAT32: "float32",
+        DataType.FLOAT64: "float64",
+    }
+    if not isinstance(dtype, DataType):
+        raise TypeError("Can only convert instances of DataType to typestr.")
+
+    if dtype not in table:
+        raise ValueError("Can not convert INVALID, AUTO or DEFAULT to typestr.")
+    return np.dtype(table[dtype]).str
+
+
+def typestr_to_data_type(typestr: str) -> DataType:
+    if not isinstance(typestr, str) or len(typestr) < 3 or not typestr[2:].isnumeric():
+        return DataType.INVALID  # type: ignore
+    table = {
+        ("b", 1): DataType.BOOL,
+        ("i", 1): DataType.INT8,
+        ("i", 2): DataType.INT16,
+        ("i", 4): DataType.INT32,
+        ("i", 8): DataType.INT64,
+        ("f", 4): DataType.FLOAT32,
+        ("f", 8): DataType.FLOAT64,
+    }
+    key = (typestr[1], int(typestr[2:]))
+    return table.get(key, DataType.INVALID)  # type: ignore

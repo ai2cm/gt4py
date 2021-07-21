@@ -33,8 +33,8 @@ from .passes import (
     InitInfoPass,
     MergeBlocksPass,
     NormalizeBlocksPass,
-    RemoveUnreachedStatementsPass,
     ReduceTemporaryStoragesPass,
+    RemoveUnreachedStatementsPass,
 )
 
 

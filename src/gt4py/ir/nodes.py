@@ -9,7 +9,7 @@
 # GT4Py is free software: you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the
 # Free Software Foundation, either version 3 of the License, or any later
-# version. See the LICENSE.txt file at the top-level directory of this
+# version. See the LICENSE.txindex(K)t file at the top-level directory of this
 # distribution for a copy of the license or check <https://www.gnu.org/licenses/>.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
@@ -49,10 +49,6 @@ NativeFunction enumeration (:class:`NativeFunction`)
     Native function identifier
     [`ABS`, `MAX`, `MIN, `MOD`, `SIN`, `COS`, `TAN`, `ARCSIN`, `ARCCOS`, `ARCTAN`,
     `SQRT`, `EXP`, `LOG`, `ISFINITE`, `ISINF`, `ISNAN`, `FLOOR`, `CEIL`, `TRUNC`]
-
-AccessIntent enumeration (:class:`AccessIntent`)
-    Access permissions
-    [`READ_ONLY`, `READ_WRITE`]
 
 LevelMarker enumeration (:class:`LevelMarker`)
     Special axis levels
@@ -97,11 +93,11 @@ storing a reference to the piece of source code which originated the node.
 
     Cast(expr: Expr, data_type: DataType)
 
-    AxisIndex(axis: str, data_type: DataType)
+    AxisPosition(axis: str, data_type: DataType)
 
-    AxisOffset(axis: str, endpt: LevelMarker, offset: int, data_type: DataType)
+    AxisIndex(axis: str, endpt: LevelMarker, offset: int, data_type: DataType)
 
-    Expr        = Literal | Ref | NativeFuncCall | Cast | CompositeExpr | InvalidBranch | AxisIndex | AxisOffset
+    Expr        = Literal | Ref | NativeFuncCall | Cast | CompositeExpr | InvalidBranch | AxisPosition | AxisIndex
 
     CompositeExpr   = UnaryOpExpr(op: UnaryOperator, arg: Expr)
                     | BinOpExpr(op: BinaryOperator, lhs: Expr, rhs: Expr)
@@ -117,8 +113,9 @@ storing a reference to the piece of source code which originated the node.
     Statement   = Decl
                 | Assign(target: Ref, value: Expr)
                 | If(condition: expr, main_body: BlockStmt, else_body: BlockStmt)
-                | While(condition: expr, body: BlockStmt)
+                | For(target: Decl, start: AxisBound | Expr, stop: AxisBound | Expr, body: BlockStmt)
                 | HorizontalIf(intervals: Dict[str, Interval], body: BlockStmt)
+                | While(condition: expr, body: BlockStmt)
                 | BlockStmt
 
     AxisBound(level: LevelMarker | VarRef, offset: int)
@@ -150,7 +147,7 @@ Implementation IR
  ::
 
     Accessor    = ParameterAccessor(symbol: str)
-                | FieldAccessor(symbol: str, intent: AccessIntent, extent: Extent)
+                | FieldAccessor(symbol: str, intent: AccessKind, extent: Extent)
 
     ApplyBlock(interval: AxisInterval,
                local_symbols: Dict[str, VarDecl],
@@ -181,12 +178,13 @@ import collections
 import copy
 import enum
 import operator
-from typing import List, Sequence
+import sys
+from typing import Generator, Sequence, Type
 
 import numpy as np
 
 from gt4py import utils as gt_utils
-from gt4py.definitions import CartesianSpace, Extent, Index
+from gt4py.definitions import AccessKind, CartesianSpace, Extent, Index
 from gt4py.utils.attrib import Any as Any
 from gt4py.utils.attrib import Dict as DictOf
 from gt4py.utils.attrib import List as ListOf
@@ -288,15 +286,6 @@ class Builtin(enum.Enum):
             result = cls.FALSE
 
         return result
-
-    def __str__(self):
-        return self.name
-
-
-@enum.unique
-class AccessIntent(enum.Enum):
-    READ_ONLY = 0
-    READ_WRITE = 1
 
     def __str__(self):
         return self.name
@@ -417,17 +406,17 @@ class Cast(Expr):
 
 
 @attribclass
-class AxisIndex(Expr):
+class AxisPosition(Expr):
     axis = attribute(of=str)
     data_type = attribute(of=DataType, default=DataType.INT32)
 
 
 @attribclass
-class AxisOffset(Expr):
+class AxisIndex(Expr):
     axis = attribute(of=str)
-    endpt = attribute(of=LevelMarker)
-    offset = attribute(of=int)
     data_type = attribute(of=DataType, default=DataType.INT32)
+    endpt = attribute(of=LevelMarker, optional=True)
+    offset = attribute(of=int, optional=True)
 
 
 @enum.unique
@@ -721,6 +710,14 @@ class AxisInterval(Node):
     end = attribute(of=AxisBound)
     loc = attribute(of=Location, optional=True)
 
+    def equals(self, other: "AxisInterval") -> bool:
+        return (
+            self.start.level.value == other.start.level.value
+            and self.start.offset == other.start.offset
+            and self.end.level.value == other.end.level.value
+            and self.end.offset == other.end.offset
+        )
+
     @classmethod
     def full_interval(cls, order=IterationOrder.PARALLEL):
         if order != IterationOrder.BACKWARD:
@@ -735,6 +732,62 @@ class AxisInterval(Node):
             )
 
         return interval
+
+    @property
+    def is_single_index(self) -> bool:
+        if not isinstance(self.start, AxisBound) or not isinstance(self.end, AxisBound):
+            return False
+
+        return self.start.level == self.end.level and self.start.offset == self.end.offset - 1
+
+    def disjoint_from(self, other: "AxisInterval") -> bool:
+        def get_offset(bound: AxisBound) -> int:
+            return (
+                0 + bound.offset if bound.level == LevelMarker.START else sys.maxsize + bound.offset
+            )
+
+        self_start = get_offset(self.start)
+        self_end = get_offset(self.end)
+
+        other_start = get_offset(other.start)
+        other_end = get_offset(other.end)
+
+        return not (self_start <= other_start < self_end) and not (
+            other_start <= self_start < other_end
+        )
+
+    @property
+    def is_single_index(self) -> bool:
+        if not isinstance(self.start, AxisBound) or not isinstance(self.end, AxisBound):
+            return False
+
+        return self.start.level == self.end.level and self.start.offset == self.end.offset - 1
+
+
+# TODO Find a better place for this in the file.
+@attribclass
+class HorizontalIf(Statement):
+    intervals = attribute(of=DictOf[str, AxisInterval])
+    body = attribute(of=BlockStmt)
+
+
+# TODO Find a better place for this in the file.
+@attribclass
+class HorizontalIf(Statement):
+    intervals = attribute(of=DictOf[str, AxisInterval])
+    body = attribute(of=BlockStmt)
+
+
+# TODO: Relocate this in the file next to other Statement nodes
+# Issue: depends on AxisInterval which is defined below
+@attribclass
+class For(Statement):
+    target = attribute(of=VarDecl)
+    start = attribute(of=UnionOf[AxisBound, Expr])
+    stop = attribute(of=UnionOf[AxisBound, Expr])
+    step = attribute(of=int)
+    body = attribute(of=BlockStmt)
+    loc = attribute(of=Location, optional=True)
 
 
 # TODO Find a better place for this in the file.
@@ -790,7 +843,7 @@ class ParameterAccessor(Accessor):
 @attribclass
 class FieldAccessor(Accessor):
     symbol = attribute(of=str)
-    intent = attribute(of=AccessIntent)
+    intent = attribute(of=AccessKind)
     extent = attribute(of=Extent, default=Extent.zeros())
 
 
@@ -1035,25 +1088,24 @@ class IRNodeDumper(IRNodeMapper):
 dump_ir = IRNodeDumper.apply
 
 
-def filter_nodes_dfs(root_node, node_type):
+def iter_nodes_of_type(root_node: Node, node_type: Type) -> Generator[Node, None, None]:
     """Yield an iterator over the nodes of node_type inside root_node in DFS order."""
-    stack = [root_node]
-    while stack:
-        curr = stack.pop()
-        assert isinstance(curr, Node)
 
-        for node_class in curr.__class__.__mro__:
-            if node_class is node_type:
-                yield curr
-
-        for key, value in iter_attributes(curr):
-            if isinstance(curr, collections.abc.Iterable):
-                if isinstance(curr, collections.abc.Mapping):
-                    children = curr.values()
+    def recurse(node: Node) -> Generator[Node, None, None]:
+        for key, value in iter_attributes(node):
+            if isinstance(node, collections.abc.Iterable):
+                if isinstance(node, collections.abc.Mapping):
+                    children = node.values()
                 else:
-                    children = curr
+                    children = node
             else:
                 children = gt_utils.listify(value)
 
-            for value in filter(lambda x: isinstance(x, Node), children):
-                stack.append(value)
+            for value in children:
+                if isinstance(value, Node):
+                    yield from recurse(value)
+
+            if isinstance(node, node_type):
+                yield node
+
+    yield from recurse(root_node)

@@ -1,6 +1,23 @@
+# -*- coding: utf-8 -*-
+#
+# GTC Toolchain - GT4Py Project - GridTools Framework
+#
+# Copyright (c) 2014-2021, ETH Zurich
+# All rights reserved.
+#
+# This file is part of the GT4Py project and the GridTools framework.
+# GT4Py is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the
+# Free Software Foundation, either version 3 of the License, or any later
+# version. See the LICENSE.txt file at the top-level directory of this
+# distribution for a copy of the license or check <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 from typing import Callable, Dict, Optional, Sequence, Tuple
 
 from gtc import gtir
+from gtc.passes.gtir_check_single_iteration import check_single_iteration
 from gtc.passes.gtir_dtype_resolver import resolve_dtype
 from gtc.passes.gtir_prune_unused_parameters import prune_unused_parameters
 from gtc.passes.gtir_upcaster import upcast
@@ -21,7 +38,7 @@ class GtirPipeline:
         self._cache: Dict[Tuple[PASS_T, ...], gtir.Stencil] = {}
 
     def steps(self) -> Sequence[PASS_T]:
-        return [prune_unused_parameters, resolve_dtype, upcast]
+        return [prune_unused_parameters, resolve_dtype, upcast, check_single_iteration]
 
     def apply(self, steps: Sequence[PASS_T]) -> gtir.Stencil:
         result = self.gtir
