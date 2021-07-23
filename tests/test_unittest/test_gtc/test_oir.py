@@ -42,6 +42,7 @@ from .oir_utils import (
     VariableOffsetFactory,
     VerticalLoopFactory,
     VerticalLoopSectionFactory,
+    WhileFactory,
 )
 
 
@@ -329,22 +330,7 @@ def test_assign_with_variable_offset():
             loop_order=LoopOrder.FORWARD,
             sections=[
                 VerticalLoopSectionFactory(
-                    horizontal_executions=[
-                        HorizontalExecutionFactory(
-                            body=[
-                                AssignStmtFactory(
-                                    left__name=out_name,
-                                    right=FieldAccessFactory(
-                                        name=in_name,
-                                        offset=VariableOffsetFactory(
-                                            k__name=offset_name,
-                                            k__dtype=DataType.INT32,
-                                        ),
-                                    ),
-                                )
-                            ]
-                        )
-                    ]
+                    horizontal_executions=[HorizontalExecutionFactory(body=[WhileFactory()])]
                 )
             ],
         ),

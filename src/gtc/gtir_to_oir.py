@@ -85,7 +85,6 @@ class GTIRToOIR(NodeTranslator):
     ) -> None:
         stmt = oir.AssignStmt(left=self.visit(node.left), right=self.visit(node.right))
         if mask is not None:
-            # Wrap inside MaskStmt
             stmt = oir.MaskStmt(body=[stmt], mask=mask)
         ctx.add_stmt(stmt)
 
@@ -193,8 +192,9 @@ class GTIRToOIR(NodeTranslator):
         combined_mask = current_mask
         if mask:
             combined_mask = oir.BinaryOp(op=LogicalOperator.AND, left=mask, right=current_mask)
-
-        self.visit(node.body, mask=combined_mask, ctx=ctx)
+        scoped_ctx = ctx.new_scope()
+        self.visit(node.body, mask=combined_mask, ctx=scoped_ctx)
+        ctx.add_stmt(oir.While(cond=combined_mask, body=scoped_ctx.stmts))
 
     def visit_Interval(self, node: gtir.Interval, **kwargs: Any) -> oir.Interval:
         return oir.Interval(
