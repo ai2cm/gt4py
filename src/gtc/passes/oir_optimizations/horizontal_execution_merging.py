@@ -66,6 +66,7 @@ class GreedyMerging(NodeTranslator):
             }
             if not conflicting:
                 horizontal_executions[-1].body += horizontal_execution.body
+                horizontal_executions[-1].declarations += horizontal_execution.declarations
                 for field, writes in current_writes.items():
                     previous_writes.setdefault(field, set()).update(writes)
                 for field, reads in current_reads.items():
