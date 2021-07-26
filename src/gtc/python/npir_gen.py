@@ -19,6 +19,7 @@ from typing import Any, Collection, Tuple, Union
 
 from eve.codegen import FormatTemplate, JinjaTemplate, TemplatedGenerator
 from gtc import common
+from gtc.cuir.cuir import VariableOffset
 from gtc.passes.gtir_legacy_extents import FIELD_EXT_T
 from gtc.python import npir
 
@@ -49,7 +50,7 @@ ORIGIN_CORRECTED_VIEW_CLASS = textwrap.dedent(
         def shim_key(self, key):
             new_args = []
             if not isinstance(key, tuple):
-                key = (key, )
+                key = (key,)
             for dim, idx in enumerate(key):
                 if self.offsets[dim] == 0:
                     new_args.append(idx)
@@ -61,6 +62,11 @@ ORIGIN_CORRECTED_VIEW_CLASS = textwrap.dedent(
                     )
                 else:
                     new_args.append(idx + self.offsets[dim])
+            if isinstance(new_args[-1], np.ndarray):
+                new_args[0:2] = np.broadcast_arrays(
+                    np.arange(new_args[0].start, new_args[0].stop)[:, None, None],
+                    np.arange(new_args[1].start, new_args[1].stop)[None, :, None],
+                )
             return tuple(new_args)
 
         def __getitem__(self, key):
@@ -98,12 +104,18 @@ class NpirGen(TemplatedGenerator):
 
     NumericalOffset = FormatTemplate("{op}{delta}")
 
+    def visit_VariableOffset(self, node: npir.VariableOffset, **kwargs: Any) -> str:
+        return self.visit(node.value)
+
     def visit_AxisOffset(self, node: npir.AxisOffset, **kwargs: Any) -> Union[str, Collection[str]]:
-        offset = self.visit(node.offset)
         axis_name = self.visit(node.axis_name)
+        offset = self.visit(node.offset)
         lpar, rpar = "()" if offset else ("", "")
-        variant = self.AxisOffset_parallel if node.parallel else self.AxisOffset_serial
-        rendered = variant.render(lpar=lpar, rpar=rpar, axis_name=axis_name, offset=offset)
+        if isinstance(node.offset, npir.VariableOffset):
+            rendered = f"{axis_name.lower()}_ + np.asarray({offset}[:])"
+        else:
+            variant = self.AxisOffset_parallel if node.parallel else self.AxisOffset_serial
+            rendered = variant.render(lpar=lpar, rpar=rpar, axis_name=axis_name, offset=offset)
         return self.generic_visit(node, parallel_or_serial_variant=rendered, **kwargs)
 
     AxisOffset_parallel = JinjaTemplate(
