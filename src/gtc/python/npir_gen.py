@@ -19,7 +19,6 @@ from typing import Any, Collection, Tuple, Union
 
 from eve.codegen import FormatTemplate, JinjaTemplate, TemplatedGenerator
 from gtc import common
-from gtc.cuir.cuir import VariableOffset
 from gtc.passes.gtir_legacy_extents import FIELD_EXT_T
 from gtc.python import npir
 
@@ -350,9 +349,23 @@ class NpirGen(TemplatedGenerator):
 
     NativeFuncCall = FormatTemplate("np.{func}({', '.join(arg for arg in args)})")
 
+    While = JinjaTemplate(
+        textwrap.dedent(
+            """\
+            _while_result = {{ cond }}
+            while np.any(_while_result):
+                {% for stmt in body %}{{ stmt }}
+                {% endfor %}
+                _while_result = {{ cond }}
+            """
+        )
+    )
+
     def visit_While(self, node: npir.While, **kwargs: Any) -> str:
-        cond_str = self.visit(node.cond, **kwargs)
-        body_str = self.visit(node.body, **kwargs)
-        while_str = f"_while_condition = {cond_str}\n"
-        while_str += "while np.any(_while_condition):\n"
-        return while_str
+        cond = self.visit(node.cond, **kwargs)
+
+        body = []
+        for body_stmt in self.visit(node.body, **kwargs):
+            body.extend([stmt for stmt in body_stmt.split("\n") if stmt])
+
+        return self.While.render(cond=cond, body=body)
