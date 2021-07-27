@@ -349,3 +349,10 @@ class NpirGen(TemplatedGenerator):
         return self.generic_visit(node, **kwargs)
 
     NativeFuncCall = FormatTemplate("np.{func}({', '.join(arg for arg in args)})")
+
+    def visit_While(self, node: npir.While, **kwargs: Any) -> str:
+        cond_str = self.visit(node.cond, **kwargs)
+        body_str = self.visit(node.body, **kwargs)
+        while_str = f"_while_condition = {cond_str}\n"
+        while_str += "while np.any(_while_condition):\n"
+        return while_str

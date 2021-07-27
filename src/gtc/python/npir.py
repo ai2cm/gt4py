@@ -152,8 +152,13 @@ class MaskBlock(common.Stmt):
     body: List[VectorAssign]
 
 
-class HorizontalBlock(common.LocNode):
+class While(common.Stmt):
+    cond: VectorLogic
     body: List[Union[VectorAssign, MaskBlock]]
+
+
+class HorizontalBlock(common.LocNode):
+    body: List[Union[VectorAssign, MaskBlock, While]]
 
 
 class VerticalPass(common.LocNode):
