@@ -74,6 +74,8 @@ class StencilBuilder:
             stencil_class = None if self.options.rebuild else self.backend.load()
         if stencil_class is None:
             stencil_class = self.backend.generate()
+        if self.options.build_info is not None:
+            self.options.build_info["def_ir"] = self.definition_ir
         return stencil_class
 
     def generate_computation(self) -> Dict[str, Union[str, Dict]]:
@@ -207,6 +209,10 @@ class StencilBuilder:
             "externals", self._externals.copy()
         )
 
+    @externals.setter
+    def externals(self, externals: Dict[str, Any]) -> None:
+        self._build_data["externals"] = externals
+
     def with_externals(self: "StencilBuilder", externals: Dict[str, Any]) -> "StencilBuilder":
         """
         Fluidly set externals for this build.
@@ -256,6 +262,10 @@ class StencilBuilder:
         return self._build_data.get("ir") or self._build_data.setdefault(
             "ir", self.frontend.generate(self.definition, self.externals, self.options)
         )
+
+    @definition_ir.setter
+    def definition_ir(self, def_ir: "StencilDefinition") -> None:
+        self._build_data["ir"] = def_ir
 
     @property
     def implementation_ir(self) -> "StencilImplementation":
