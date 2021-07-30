@@ -86,7 +86,6 @@ class GreedyMerging(NodeTranslator):
 @dataclass
 class OnTheFlyMerging(NodeTranslator):
     """Merges consecutive horizontal executions inside parallel vertical loops by introducing redundant computations.
-
     Limitations:
     * Works on the level of whole horizontal executions, no full dependency analysis is performed (common subexpression and dead code eliminitation at a later stage can work around this limitation).
     * The chosen default merge limits are totally arbitrary.
@@ -126,9 +125,9 @@ class OnTheFlyMerging(NodeTranslator):
         horizontal_executions: List[oir.HorizontalExecution],
         symtable: Dict[str, Any],
         new_symbol_name: Callable[[str], str],
+        protected_fields: Set[str],
     ) -> List[oir.HorizontalExecution]:
         """Recursively merge horizontal executions.
-
         Uses the following algorithm:
         1. Get output fields of the first horizontal execution.
         2. Check in which following h. execs. the outputs are read.
@@ -146,6 +145,9 @@ class OnTheFlyMerging(NodeTranslator):
 
         def first_has_large_body() -> bool:
             return len(first.body) > self.max_horizontal_execution_body_size
+
+        def first_writes_protected() -> bool:
+            return bool(protected_fields & first_accesses.write_fields())
 
         def first_has_expensive_function_call() -> bool:
             if self.allow_expensive_function_duplication:
@@ -167,10 +169,11 @@ class OnTheFlyMerging(NodeTranslator):
 
         if (
             first_fields_rewritten_later()
+            or first_writes_protected()
             or first_has_large_body()
             or first_has_expensive_function_call()
         ):
-            return [first] + self._merge(others, symtable, new_symbol_name)
+            return [first] + self._merge(others, symtable, new_symbol_name, protected_fields)
 
         writes = first_accesses.write_fields()
         others_otf = []
@@ -210,15 +213,24 @@ class OnTheFlyMerging(NodeTranslator):
                 )
             others_otf.append(merged)
 
-        return self._merge(others_otf, symtable, new_symbol_name)
+        return self._merge(others_otf, symtable, new_symbol_name, protected_fields)
 
     def visit_VerticalLoopSection(
         self, node: oir.VerticalLoopSection, **kwargs: Any
     ) -> oir.VerticalLoopSection:
-        return oir.VerticalLoopSection(
-            interval=node.interval,
-            horizontal_executions=self._merge(node.horizontal_executions, **kwargs),
-        )
+
+        last_vls = None
+        next_vls = node
+        applied = True
+        while applied:
+            last_vls = next_vls
+            next_vls = oir.VerticalLoopSection(
+                interval=last_vls.interval,
+                horizontal_executions=self._merge(last_vls.horizontal_executions, **kwargs),
+            )
+            applied = len(next_vls.horizontal_executions) < len(last_vls.horizontal_executions)
+
+        return next_vls
 
     def visit_VerticalLoop(self, node: oir.VerticalLoop, **kwargs: Any) -> oir.VerticalLoop:
         if node.loop_order != common.LoopOrder.PARALLEL:
@@ -232,12 +244,21 @@ class OnTheFlyMerging(NodeTranslator):
         )
 
     def visit_Stencil(self, node: oir.Stencil, **kwargs: Any) -> oir.Stencil:
-        vertical_loops = self.visit(
-            node.vertical_loops,
-            symtable=node.symtable_,
-            new_symbol_name=symbol_name_creator(set(node.symtable_)),
-            **kwargs,
-        )
+        vertical_loops: List[oir.VerticalLoop] = []
+        protected_fields = set(n.name for n in node.params)
+        for vl in reversed(node.vertical_loops):
+            vertical_loops.insert(
+                0,
+                self.visit(
+                    vl,
+                    symtable=node.symtable_,
+                    new_symbol_name=symbol_name_creator(set(node.symtable_)),
+                    protected_fields=protected_fields,
+                    **kwargs,
+                ),
+            )
+            access_collection = AccessCollector.apply(vl)
+            protected_fields |= access_collection.fields()
         accessed = AccessCollector.apply(vertical_loops).fields()
         return oir.Stencil(
             name=node.name,
