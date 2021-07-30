@@ -16,11 +16,12 @@
 
 import itertools
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Set, Union
+from typing import Any, Dict, Generator, List, Set, Union
 
 from devtools import debug  # noqa: F401
 
 import eve
+from eve.iterators import TreeIterationItem
 from gtc import common, oir
 from gtc.common import CartesianOffset, VariableOffset
 from gtc.gtcpp import gtcpp
@@ -30,25 +31,30 @@ from gtc.gtcpp import gtcpp
 # - Each VerticalLoop is MultiStage
 
 
-def _extract_accessors(node: eve.Node) -> List[gtcpp.GTAccessor]:
-    def _check_extent(extent):
-        if extent[1].k[1] == VariableOffset.LARGE_NUM:
-            extent[1].k = (-extent[1].k[1], extent[1].k[1])
-        return extent
+def _extract_accessors(apply_method: gtcpp.GTApplyMethod) -> List[gtcpp.GTAccessor]:
+    @eve.utils.as_xiter
+    def _iter_valid_accessors(
+        apply_method: gtcpp.GTApplyMethod,
+    ) -> Generator[TreeIterationItem, None, None]:
+        for stmt in apply_method.body:
+            if (
+                not isinstance(stmt, gtcpp.IfStmt)
+                or stmt.cond.iter_tree()
+                .if_isinstance(gtcpp.AccessorRef)
+                .filter(lambda acc: acc.name[2:] == "pos")
+                .to_list()
+            ):
+                yield from stmt.iter_tree().if_isinstance(gtcpp.AccessorRef)
 
-    extents = dict(
-        node.iter_tree()
-        .if_isinstance(gtcpp.AccessorRef)
-        .reduceby(
-            (lambda extent, accessor_ref: extent + accessor_ref.offset),
-            "name",
-            init=gtcpp.GTExtent.zero(),
-        )
-        .map(_check_extent)
+    extents = _iter_valid_accessors(apply_method).reduceby(
+        (lambda extent, accessor_ref: extent + accessor_ref.offset),
+        "name",
+        init=gtcpp.GTExtent.zero(),
+        as_dict=True,
     )
 
     inout_fields: Set[str] = (
-        node.iter_tree()
+        apply_method.iter_tree()
         .if_isinstance(gtcpp.AssignStmt)
         .getattr("left")
         .if_isinstance(gtcpp.AccessorRef)
@@ -56,7 +62,7 @@ def _extract_accessors(node: eve.Node) -> List[gtcpp.GTAccessor]:
         .to_set()
     )
     ndims = dict(
-        node.iter_tree()
+        apply_method.iter_tree()
         .if_isinstance(gtcpp.AccessorRef)
         .map(lambda accessor: (accessor.name, 3 + len(accessor.data_index)))
     )
@@ -194,6 +200,89 @@ class OIRToGTCpp(eve.NodeTranslator):
         return gtcpp.AssignStmt(
             left=self.visit(node.left, **kwargs), right=self.visit(node.right, **kwargs)
         )
+
+    def _ref_from_axis_bound(
+        self, axis_bound: common.AxisBound, *, axis: str, comp_ctx: GTComputationContext
+    ) -> gtcpp.Expr:
+        if axis_bound.level == common.LevelMarker.END:
+            comp_ctx.add_axis_endpoint(axis)
+            return gtcpp.BinaryOp(
+                op=common.ArithmeticOperator.ADD,
+                left=gtcpp.AccessorRef(
+                    name=comp_ctx.axis_endpoints[axis],
+                    offset=common.CartesianOffset.zero(),
+                    dtype=common.DataType.INT32,
+                ),
+                right=gtcpp.Literal(value=str(axis_bound.offset), dtype=common.DataType.INT32),
+            )
+        else:
+            return gtcpp.Literal(value=str(axis_bound.offset), dtype=common.DataType.INT32)
+
+    def _expr_from_horizontal_interval(
+        self,
+        interval: common.HorizontalInterval,
+        *,
+        axis: str,
+        comp_ctx: GTComputationContext,
+        **kwargs: Any,
+    ) -> gtcpp.Expr:
+        comp_ctx.add_axis_index(axis)
+        if interval.is_single_index:
+            return gtcpp.BinaryOp(
+                op=common.ComparisonOperator.EQ,
+                left=gtcpp.AccessorRef(
+                    name=comp_ctx.axis_indices[axis],
+                    offset=common.CartesianOffset.zero(),
+                    dtype=common.DataType.INT32,
+                ),
+                right=self._ref_from_axis_bound(interval.start, axis=axis, comp_ctx=comp_ctx),
+            )
+        else:
+            if interval.start:
+                start_expr = gtcpp.BinaryOp(
+                    op=common.ComparisonOperator.GE,
+                    left=gtcpp.AccessorRef(
+                        name=comp_ctx.axis_indices[axis],
+                        offset=common.CartesianOffset.zero(),
+                        dtype=common.DataType.INT32,
+                    ),
+                    right=self._ref_from_axis_bound(interval.start, axis=axis, comp_ctx=comp_ctx),
+                )
+            else:
+                start_expr = None
+
+            if interval.end:
+                end_expr = gtcpp.BinaryOp(
+                    op=common.ComparisonOperator.LT,
+                    left=gtcpp.AccessorRef(
+                        name=comp_ctx.axis_indices[axis],
+                        offset=common.CartesianOffset.zero(),
+                        dtype=common.DataType.INT32,
+                    ),
+                    right=self._ref_from_axis_bound(interval.end, axis=axis, comp_ctx=comp_ctx),
+                )
+            else:
+                end_expr = None
+
+            if start_expr and end_expr:
+                return gtcpp.BinaryOp(
+                    op=common.LogicalOperator.AND, left=start_expr, right=end_expr
+                )
+            else:
+                # Return the first non-None expr, or if all are None, then return None
+                return next((expr for expr in (start_expr, end_expr) if expr is not None), None)
+
+    def visit_HorizontalMask(self, node: oir.HorizontalMask, **kwargs: Any) -> gtcpp.Expr:
+        i_expr = self._expr_from_horizontal_interval(node.i, axis="i", **kwargs)
+        j_expr = self._expr_from_horizontal_interval(node.j, axis="j", **kwargs)
+        if i_expr and j_expr:
+            return gtcpp.BinaryOp(op=common.LogicalOperator.AND, left=i_expr, right=j_expr)
+        else:
+            true_value = common.Literal(
+                value=common.BuiltInLiteral.TRUE, dtype=common.DataType.BOOL
+            )
+            # Return the first non-None expr, or if all are None, then return True
+            return next((expr for expr in (i_expr, j_expr) if expr is not None), true_value)
 
     def visit_MaskStmt(self, node: oir.MaskStmt, **kwargs: Any) -> gtcpp.IfStmt:
         cond = self.visit(node.mask, **kwargs)

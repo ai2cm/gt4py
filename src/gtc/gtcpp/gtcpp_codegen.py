@@ -226,14 +226,11 @@ class GTCppCodegen(codegen.TemplatedGenerator):
         {
             auto grid = make_grid(domain[0], domain[1], axis<1,
                 axis_config::offset_limit<${offset_limit}>>{domain[2]});
-
             auto ${ computation_name } = [](${ ','.join('auto ' + a for a in arguments) }) {
                 ${ '\\n'.join(temporaries) }
                 return multi_pass(${ ','.join(multi_stages) });
             };
-
             ${'\\n'.join(extra_decls)}
-
             run(${computation_name}, ${gt_backend_t}<>{}, grid, ${','.join(f"std::forward<decltype({arg})>({arg})" for arg in arguments)});
         }
         %endif
