@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 #
-# GTC Toolchain - GT4Py Project - GridTools Framework
+# GT4Py - GridTools4Py - GridTools for Python
 #
 # Copyright (c) 2014-2021, ETH Zurich
 # All rights reserved.
 #
-# This file is part of the GT4Py project and the GridTools framework.
+# This file is part the GT4Py project and the GridTools framework.
 # GT4Py is free software: you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the
 # Free Software Foundation, either version 3 of the License, or any later
@@ -14,234 +14,156 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Type
 
-from eve import NodeTranslator
-from gtc import common, oir
-from gtc.common import GTCPostconditionError, GTCPreconditionError
+from eve import codegen
+from gt4py import backend as gt_backend
+from gt4py import gt_src_manager
+from gt4py.backend import BaseGTBackend, CLIBackendMixin
+from gt4py.backend.gt_backends import (
+    GTCUDAPyModuleGenerator,
+    cuda_is_compatible_layout,
+    cuda_is_compatible_type,
+    make_cuda_layout_map,
+)
+from gt4py.backend.gtc_backend.common import bindings_main_template, pybuffer_to_sid
+from gt4py.backend.gtc_backend.defir_to_gtir import DefIRToGTIR
+from gtc import gtir_to_oir
+from gtc.common import DataType
+from gtc.cuir import cuir, cuir_codegen, extent_analysis, kernel_fusion, oir_to_cuir
+from gtc.passes.gtir_pipeline import GtirPipeline
+from gtc.passes.oir_dace_optimizations.horizontal_execution_merging import (
+    graph_merge_horizontal_executions,
+)
+from gtc.passes.oir_optimizations.caches import KCacheDetection
+from gtc.passes.oir_optimizations.pruning import NoFieldAccessPruning
+from gtc.passes.oir_pipeline import OirPipeline
 
-from .utils import AccessCollector, symbol_name_creator
+
+if TYPE_CHECKING:
+    from gt4py.stencil_object import StencilObject
 
 
-class GreedyMerging(NodeTranslator):
-    """Merges consecutive horizontal executions if there are no write/read conflicts.
+class GTCCudaExtGenerator:
+    def __init__(self, class_name, module_name, backend):
+        self.class_name = class_name
+        self.module_name = module_name
+        self.backend = backend
 
-    Preconditions: All vertical loops are non-empty.
-    Postcondition: The number of horizontal executions is equal or smaller than before.
-    """
+    def __call__(self, definition_ir) -> Dict[str, Dict[str, str]]:
+        gtir = GtirPipeline(DefIRToGTIR.apply(definition_ir)).full()
+        oir = OirPipeline(gtir_to_oir.GTIRToOIR().visit(gtir)).full(
+            skip=[graph_merge_horizontal_executions, KCacheDetection, NoFieldAccessPruning]
+        )
+        cuir = oir_to_cuir.OIRToCUIR().visit(oir)
+        cuir = kernel_fusion.FuseKernels().visit(cuir)
+        cuir = extent_analysis.ComputeExtents().visit(cuir)
+        cuir = extent_analysis.CacheExtents().visit(cuir)
+        implementation = cuir_codegen.CUIRCodegen.apply(cuir)
+        bindings = GTCCudaBindingsCodegen.apply(
+            cuir, module_name=self.module_name, backend=self.backend
+        )
+        return {
+            "computation": {"computation.hpp": implementation},
+            "bindings": {"bindings.cu": bindings},
+        }
 
-    def visit_VerticalLoopSection(
-        self, node: oir.VerticalLoopSection, **kwargs: Any
-    ) -> oir.VerticalLoopSection:
-        if not node.horizontal_executions:
-            raise GTCPreconditionError(expected="non-empty vertical loop")
-        result = self.generic_visit(node, **kwargs)
-        horizontal_executions = [result.horizontal_executions[0]]
-        accesses = AccessCollector.apply(horizontal_executions[-1])
 
-        def ij_offsets(
-            offsets: Dict[str, Set[Tuple[int, int, int]]]
-        ) -> Dict[str, Set[Tuple[int, int]]]:
-            return {
-                field: {o[:2] for o in field_offsets} for field, field_offsets in offsets.items()
-            }
+class GTCCudaBindingsCodegen(codegen.TemplatedGenerator):
+    def __init__(self, backend):
+        self.backend = backend
+        self._unique_index: int = 0
 
-        previous_reads = ij_offsets(accesses.read_offsets())
-        previous_writes = ij_offsets(accesses.write_offsets())
-        for horizontal_execution in result.horizontal_executions[1:]:
-            accesses = AccessCollector.apply(horizontal_execution)
-            current_reads = ij_offsets(accesses.read_offsets())
-            current_writes = ij_offsets(accesses.write_offsets())
+    def unique_index(self) -> int:
+        self._unique_index += 1
+        return self._unique_index
 
-            conflicting = {
-                field
-                for field, offsets in current_reads.items()
-                if field in previous_writes and offsets ^ previous_writes[field]
-            } | {
-                field
-                for field, offsets in current_writes.items()
-                if field in previous_reads
-                and any(o[:2] != (0, 0) for o in offsets ^ previous_reads[field])
-            }
-            if not conflicting:
-                horizontal_executions[-1].body += horizontal_execution.body
-                horizontal_executions[-1].declarations += horizontal_execution.declarations
-                for field, writes in current_writes.items():
-                    previous_writes.setdefault(field, set()).update(writes)
-                for field, reads in current_reads.items():
-                    previous_reads.setdefault(field, set()).update(reads)
+    def visit_DataType(self, dtype: DataType, **kwargs):
+        return cuir_codegen.CUIRCodegen().visit_DataType(dtype)
+
+    def visit_FieldDecl(self, node: cuir.FieldDecl, **kwargs):
+        if "external_arg" in kwargs:
+            domain_ndim = node.dimensions.count(True)
+            data_ndim = len(node.data_dims)
+            sid_ndim = domain_ndim + data_ndim
+            if kwargs["external_arg"]:
+                return "py::buffer {name}, std::array<gt::uint_t,{sid_ndim}> {name}_origin".format(
+                    name=node.name,
+                    sid_ndim=sid_ndim,
+                )
             else:
-                horizontal_executions.append(horizontal_execution)
-                previous_writes = current_writes
-                previous_reads = current_reads
-        result.horizontal_executions = horizontal_executions
-        if len(result.horizontal_executions) > len(node.horizontal_executions):
-            raise GTCPostconditionError(
-                expected="the number of horizontal executions is equal or smaller than before"
-            )
-        return result
-
-
-@dataclass
-class OnTheFlyMerging(NodeTranslator):
-    """Merges consecutive horizontal executions inside parallel vertical loops by introducing redundant computations.
-
-    Limitations:
-    * Works on the level of whole horizontal executions, no full dependency analysis is performed (common subexpression and dead code eliminitation at a later stage can work around this limitation).
-    * The chosen default merge limits are totally arbitrary.
-    """
-
-    max_horizontal_execution_body_size: int = 100
-    allow_expensive_function_duplication: bool = False
-
-    def visit_CartesianOffset(
-        self,
-        node: common.CartesianOffset,
-        *,
-        shift: Optional[Tuple[int, int, int]] = None,
-        **kwargs: Any,
-    ) -> common.CartesianOffset:
-        if shift:
-            di, dj, dk = shift
-            return common.CartesianOffset(i=node.i + di, j=node.j + dj, k=node.k + dk)
-        return self.generic_visit(node, **kwargs)
-
-    def visit_FieldAccess(
-        self,
-        node: oir.FieldAccess,
-        *,
-        offset_symbol_map: Dict[Tuple[str, Tuple[int, int, int]], str] = None,
-        **kwargs: Any,
-    ) -> Union[oir.FieldAccess, oir.ScalarAccess]:
-        if offset_symbol_map:
-            offset = self.visit(node.offset, **kwargs)
-            key = node.name, (offset.i, offset.j, offset.k)
-            if key in offset_symbol_map:
-                return oir.ScalarAccess(name=offset_symbol_map[key], dtype=node.dtype)
-        return self.generic_visit(node, **kwargs)
-
-    def _merge(
-        self,
-        horizontal_executions: List[oir.HorizontalExecution],
-        symtable: Dict[str, Any],
-        new_symbol_name: Callable[[str], str],
-    ) -> List[oir.HorizontalExecution]:
-        """Recursively merge horizontal executions.
-
-        Uses the following algorithm:
-        1. Get output fields of the first horizontal execution.
-        2. Check in which following h. execs. the outputs are read.
-        3. Duplicate the body of the first h. exec. for each read access (with corresponding offset) and prepend it to the depending h. execs.
-        4. Recurse on the resulting h. execs.
-        """
-        if len(horizontal_executions) <= 1:
-            return horizontal_executions
-        first, *others = horizontal_executions
-        first_accesses = AccessCollector.apply(first)
-        other_accesses = AccessCollector.apply(others)
-
-        def first_fields_rewritten_later() -> bool:
-            return bool(first_accesses.fields() & other_accesses.write_fields())
-
-        def first_has_large_body() -> bool:
-            return len(first.body) > self.max_horizontal_execution_body_size
-
-        def first_has_expensive_function_call() -> bool:
-            if self.allow_expensive_function_duplication:
-                return False
-            nf = common.NativeFunction
-            expensive_calls = {
-                nf.SIN,
-                nf.COS,
-                nf.TAN,
-                nf.ARCSIN,
-                nf.ARCCOS,
-                nf.ARCTAN,
-                nf.SQRT,
-                nf.EXP,
-                nf.LOG,
-            }
-            calls = first.iter_tree().if_isinstance(oir.NativeFuncCall).getattr("func")
-            return any(call in expensive_calls for call in calls)
-
-        if (
-            first_fields_rewritten_later()
-            or first_has_large_body()
-            or first_has_expensive_function_call()
-        ):
-            return [first] + self._merge(others, symtable, new_symbol_name)
-
-        writes = first_accesses.write_fields()
-        others_otf = []
-        for horizontal_execution in others:
-            read_offsets: Set[Tuple[int, int, int]] = set()
-            read_offsets = read_offsets.union(
-                *(
-                    offsets
-                    for field, offsets in AccessCollector.apply(horizontal_execution)
-                    .read_offsets()
-                    .items()
-                    if field in writes
+                return pybuffer_to_sid(
+                    name=node.name,
+                    ctype=self.visit(node.dtype),
+                    domain_dim_flags=node.dimensions,
+                    data_ndim=len(node.data_dims),
+                    stride_kind_index=self.unique_index(),
+                    backend=self.backend,
                 )
-            )
 
-            if not read_offsets:
-                others_otf.append(horizontal_execution)
-                continue
+    def visit_ScalarDecl(self, node: cuir.ScalarDecl, **kwargs):
+        if "external_arg" in kwargs:
+            if kwargs["external_arg"]:
+                return "{dtype} {name}".format(name=node.name, dtype=self.visit(node.dtype))
+            else:
+                return "gridtools::stencil::make_global_parameter({name})".format(name=node.name)
 
-            offset_symbol_map = {
-                (name, o): new_symbol_name(name) for name in writes for o in read_offsets
-            }
-
-            merged = oir.HorizontalExecution(
-                body=self.visit(horizontal_execution.body, offset_symbol_map=offset_symbol_map),
-                declarations=horizontal_execution.declarations
-                + [
-                    oir.LocalScalar(name=new_name, dtype=symtable[old_name].dtype)
-                    for (old_name, _), new_name in offset_symbol_map.items()
-                ]
-                + [d for d in first.declarations if d not in horizontal_execution.declarations],
-            )
-            for offset in read_offsets:
-                merged.body = (
-                    self.visit(first.body, shift=offset, offset_symbol_map=offset_symbol_map)
-                    + merged.body
-                )
-            others_otf.append(merged)
-
-        return self._merge(others_otf, symtable, new_symbol_name)
-
-    def visit_VerticalLoopSection(
-        self, node: oir.VerticalLoopSection, **kwargs: Any
-    ) -> oir.VerticalLoopSection:
-        return oir.VerticalLoopSection(
-            interval=node.interval,
-            horizontal_executions=self._merge(node.horizontal_executions, **kwargs),
-        )
-
-    def visit_VerticalLoop(self, node: oir.VerticalLoop, **kwargs: Any) -> oir.VerticalLoop:
-        if node.loop_order != common.LoopOrder.PARALLEL:
-            return node
-        sections = self.visit(node.sections, **kwargs)
-        accessed = AccessCollector.apply(sections).fields()
-        return oir.VerticalLoop(
-            loop_order=node.loop_order,
-            sections=sections,
-            caches=[c for c in node.caches if c.name in accessed],
-        )
-
-    def visit_Stencil(self, node: oir.Stencil, **kwargs: Any) -> oir.Stencil:
-        vertical_loops = self.visit(
-            node.vertical_loops,
-            symtable=node.symtable_,
-            new_symbol_name=symbol_name_creator(set(node.symtable_)),
+    def visit_Program(self, node: cuir.Program, **kwargs):
+        assert "module_name" in kwargs
+        entry_params = self.visit(node.params, external_arg=True, **kwargs)
+        sid_params = self.visit(node.params, external_arg=False, **kwargs)
+        return self.generic_visit(
+            node,
+            entry_params=entry_params,
+            sid_params=sid_params,
             **kwargs,
         )
-        accessed = AccessCollector.apply(vertical_loops).fields()
-        return oir.Stencil(
-            name=node.name,
-            params=node.params,
-            vertical_loops=vertical_loops,
-            declarations=[d for d in node.declarations if d.name in accessed],
+
+    Program = bindings_main_template()
+
+    @classmethod
+    def apply(cls, root, *, module_name="stencil", backend, **kwargs) -> str:
+        generated_code = cls(backend).visit(root, module_name=module_name, **kwargs)
+        formatted_code = codegen.format_source("cpp", generated_code, style="LLVM")
+        return formatted_code
+
+
+@gt_backend.register
+class GTCCudaBackend(BaseGTBackend, CLIBackendMixin):
+    """CUDA backend using gtc."""
+
+    name = "gtc:cuda"
+    options = {**BaseGTBackend.GT_BACKEND_OPTS, "device_sync": {"versioning": True, "type": bool}}
+    languages = {"computation": "cuda", "bindings": ["python"]}
+    storage_info = {
+        "alignment": 32,
+        "device": "gpu",
+        "layout_map": make_cuda_layout_map,
+        "is_compatible_layout": cuda_is_compatible_layout,
+        "is_compatible_type": cuda_is_compatible_type,
+    }
+    PYEXT_GENERATOR_CLASS = GTCCudaExtGenerator  # type: ignore
+    MODULE_GENERATOR_CLASS = GTCUDAPyModuleGenerator
+    GT_BACKEND_T = "gpu"
+
+    def generate_extension(self, **kwargs: Any) -> Tuple[str, str]:
+        return self.make_extension(gt_version=2, ir=self.builder.definition_ir, uses_cuda=True)
+
+    def generate(self) -> Type["StencilObject"]:
+        self.check_options(self.builder.options)
+
+        # Generate the Python binary extension (checking if GridTools sources are installed)
+        if not gt_src_manager.has_gt_sources(2) and not gt_src_manager.install_gt_sources(2):
+            raise RuntimeError("Missing GridTools sources.")
+
+        pyext_module_name: Optional[str]
+        pyext_file_path: Optional[str]
+
+        # TODO(havogt) add bypass if computation has no effect
+        pyext_module_name, pyext_file_path = self.generate_extension()
+
+        # Generate and return the Python wrapper class
+        return self.make_module(
+            pyext_module_name=pyext_module_name,
+            pyext_file_path=pyext_file_path,
         )
