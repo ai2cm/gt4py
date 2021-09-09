@@ -19,8 +19,15 @@ import itertools
 import pytest
 from pydantic.error_wrappers import ValidationError
 
-from gtc.common import DataType, HorizontalInterval, LevelMarker, LoopOrder, VariableOffset, CartesianOffset
-from gtc.oir import AxisBound, Interval, FieldAccess
+from gtc.common import (
+    CartesianOffset,
+    DataType,
+    HorizontalInterval,
+    LevelMarker,
+    LoopOrder,
+    VariableOffset,
+)
+from gtc.oir import AxisBound, FieldAccess, Interval
 
 from .oir_utils import (
     AssignStmtFactory,
@@ -361,6 +368,8 @@ def test_assign_with_variable_offset():
     assert isinstance(variable_assign.right.offset, VariableOffset)
     assert isinstance(variable_assign.right.offset.k, FieldAccess)
     assert isinstance(variable_assign.right.offset.k.offset, CartesianOffset)
+
+
 def test_overlapping_horizontal_switch():
     with pytest.raises(ValidationError, match="must be disjoint specializations"):
         AssignStmtFactory(

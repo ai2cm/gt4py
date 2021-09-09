@@ -1187,7 +1187,9 @@ class IRMaker(ast.NodeVisitor):
             elif isinstance(node.value, ast.Subscript):
                 for i in index:
                     result.data_index.append(
-                        gt_ir.ScalarLiteral(value=i, data_type=gt_ir.DataType.INT64) if isinstance(i, int) else i
+                        gt_ir.ScalarLiteral(value=i, data_type=gt_ir.DataType.INT64)
+                        if isinstance(i, int)
+                        else i
                     )
             else:
                 raise GTScriptSyntaxError(
