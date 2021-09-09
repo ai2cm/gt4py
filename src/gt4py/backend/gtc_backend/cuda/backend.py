@@ -35,7 +35,6 @@ from gtc.passes.gtir_pipeline import GtirPipeline
 from gtc.passes.oir_dace_optimizations.horizontal_execution_merging import (
     graph_merge_horizontal_executions,
 )
-from gtc.passes.oir_optimizations.caches import KCacheDetection
 from gtc.passes.oir_optimizations.pruning import NoFieldAccessPruning
 from gtc.passes.oir_pipeline import OirPipeline
 
@@ -53,11 +52,7 @@ class GTCCudaExtGenerator:
     def __call__(self, definition_ir) -> Dict[str, Dict[str, str]]:
         gtir = GtirPipeline(DefIRToGTIR.apply(definition_ir)).full()
         oir = OirPipeline(gtir_to_oir.GTIRToOIR().visit(gtir)).full(
-            skip=[
-                graph_merge_horizontal_executions,
-                KCacheDetection,
-                NoFieldAccessPruning,
-            ]
+            skip=[graph_merge_horizontal_executions, NoFieldAccessPruning]
         )
         cuir = oir_to_cuir.OIRToCUIR().visit(oir)
         cuir = kernel_fusion.FuseKernels().visit(cuir)
