@@ -54,7 +54,10 @@ class CUIRCodegen(codegen.TemplatedGenerator):
         """
     )
 
-    FieldAccess = as_mako("${name}(${offset}${''.join(f', {i}_c' for i in _this_node.data_index)})")
+    def visit_FieldAccess(self, node: cuir.FieldAccess, **kwargs: Any) -> str:
+        offset = self.visit(node.offset, **kwargs)
+        data_index = "".join(f", {self.visit(d, **kwargs)}" for d in node.data_index)
+        return f"{node.name}({offset}{data_index})"
 
     def visit_For(self, node: cuir.For, **kwargs):
         op = "<" if node.inc > 0 else ">"
