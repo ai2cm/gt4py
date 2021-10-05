@@ -1,0 +1,14 @@
+import cupy
+import os
+
+def make_ext(modname, pyxfilename):
+    from distutils.extension import Extension
+    extra_compile_args = ["-std=c++11", "-Wall", "-O3", "-march=native"]
+    return Extension(name=modname,
+                     sources=[pyxfilename],
+                     include_dirs=[f"{cupy.cuda.get_cuda_path()}/include"],
+                     library_dirs=[f"{cupy.cuda.get_cuda_path()}/lib64"],
+                     libraries=["cudart_static"],
+                     extra_compile_args=extra_compile_args,
+                     define_macros=[('CYTHON_TRACE', '1')],
+                     language='c++')

@@ -104,6 +104,7 @@ def get_gt_pyext_build_opts(
             "-fvisibility=hidden",
             "--compiler-options",
             "-fPIC",
+            "-ftemplate-depth=1000",
             *extra_compile_args_from_config["nvcc"],
         ],
     )

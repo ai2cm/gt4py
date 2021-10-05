@@ -42,6 +42,7 @@ from gt4py.gtscript import (
     region,
     sin,
 )
+from gt4py.ir.nodes import DataType
 from gt4py.utils.attrib import Union as UnionOf
 
 
@@ -565,14 +566,14 @@ class TestRegions:
 
     def test_error_undefined(self):
         def stencil(in_f: gtscript.Field[np.float_]):
-            from gt4py.__externals__ import i0  # forget to add 'ia'
+            from gt4py.__externals__ import i0, ia  # forget to add 'ia'
 
             with computation(PARALLEL), interval(...):
                 in_f = in_f + 1.0
                 with horizontal(region[i0 : 1 + ia, :]):
                     in_f = 1.0
 
-        with pytest.raises(gt_frontend.GTScriptSyntaxError, match="Unknown symbol"):
+        with pytest.raises(gt_frontend.GTScriptSyntaxError, match="Missing or invalid value"):
             parse_definition(stencil, name=inspect.stack()[0][3], module=self.__class__.__name__)
 
     def test_error_nested(self):

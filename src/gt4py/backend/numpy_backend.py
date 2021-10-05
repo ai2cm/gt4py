@@ -236,8 +236,8 @@ class NumPySourceGenerator(PythonSourceGenerator):
         ]
         parallel_axes_dims = [self.impl_node.domain.index(axis) for axis in parallel_axes_names]
 
-        lower_indices = self.block_info.extent.lower_indices
-        upper_indices = self.block_info.extent.upper_indices
+        lower_indices = extent.lower_indices
+        upper_indices = extent.upper_indices
 
         index = []
         for fd, d in enumerate(parallel_axes_dims):

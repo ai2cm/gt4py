@@ -15,6 +15,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from typing import Any, List, Optional, Tuple, Union
+from dataclasses import dataclass
 
 from pydantic import validator
 
@@ -212,9 +213,18 @@ class Kernel(LocNode):
             raise ValueError("Mixed k-parallelism in kernel")
         return v
 
+@dataclass
+class DependencyGraph:
+    row_ind: List[int]
+    col_ind: List[int]
+    val_ind: Optional[List[int]] = None
 
 class Program(LocNode, SymbolTableTrait):
     name: Str
     params: List[Decl]
     temporaries: List[Temporary]
     kernels: List[Kernel]
+    # node i dependent on j: dependency[i, j] != 0, stored in CRS format
+    # DependencyGraph(row_ind, col_ind), dependency[i, j] = j in col_ind[i: i + 1]
+    # None means uninitialized, use serial semantics as default
+    dependency: Optional[DependencyGraph]

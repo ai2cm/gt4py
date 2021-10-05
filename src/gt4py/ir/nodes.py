@@ -417,6 +417,8 @@ class AxisOffset(Expr):
     endpt = attribute(of=LevelMarker)
     offset = attribute(of=int)
     data_type = attribute(of=DataType, default=DataType.INT32)
+    endpt = attribute(of=LevelMarker, optional=True)
+    offset = attribute(of=int, optional=True)
 
 
 @enum.unique
@@ -710,6 +712,14 @@ class AxisInterval(Node):
     end = attribute(of=AxisBound)
     loc = attribute(of=Location, optional=True)
 
+    def equals(self, other: "AxisInterval") -> bool:
+        return (
+            self.start.level.value == other.start.level.value
+            and self.start.offset == other.start.offset
+            and self.end.level.value == other.end.level.value
+            and self.end.offset == other.end.offset
+        )
+
     @classmethod
     def full_interval(cls, order=IterationOrder.PARALLEL):
         if order != IterationOrder.BACKWARD:
@@ -733,9 +743,6 @@ class AxisInterval(Node):
         return self.start.level == self.end.level and self.start.offset == self.end.offset - 1
 
     def disjoint_from(self, other: "AxisInterval") -> bool:
-        # This made-up constant must be larger than any LevelMarker.offset used
-        DOMAIN_SIZE: int = 1000
-
         def get_offset(bound: AxisBound) -> int:
             return (
                 0 + bound.offset if bound.level == LevelMarker.START else sys.maxsize + bound.offset
@@ -757,6 +764,13 @@ class AxisInterval(Node):
             return False
 
         return self.start.level == self.end.level and self.start.offset == self.end.offset - 1
+
+
+# TODO Find a better place for this in the file.
+@attribclass
+class HorizontalIf(Statement):
+    intervals = attribute(of=DictOf[str, AxisInterval])
+    body = attribute(of=BlockStmt)
 
 
 # TODO Find a better place for this in the file.

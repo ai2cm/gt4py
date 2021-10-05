@@ -298,7 +298,7 @@ class StencilObject(abc.ABC):
                     )
 
     def _call_run(
-        self, field_args, parameter_args, domain, origin, *, validate_args=True, exec_info=None
+        self, field_args, parameter_args, domain, origin, *, validate_args=True, exec_info=None, async_launch=False, streams=0
     ) -> None:
         """Check and preprocess the provided arguments (called by :class:`StencilObject` subclasses).
 
@@ -342,6 +342,14 @@ class StencilObject(abc.ABC):
                 performance statistics. These include the stencil calls count, the
                 cumulative time spent in all stencil calls, and the actual time spent
                 in carrying out the computations.
+
+            async_launch: `bool`, optional
+                Enable asynchronous CUDA kernel launching, only used in GTC:CUDA
+                backend. (`False` by default).
+
+            streams: `Union[List[int], int]`, optional
+                Once `sync_launch` enabled, specify CUDA streams to launch
+                asynchronously. (`0` by default)
 
         Returns
         -------
@@ -398,7 +406,7 @@ class StencilObject(abc.ABC):
             self._validate_args(field_args, parameter_args, domain, origin)
 
         self.run(
-            _domain_=domain, _origin_=origin, exec_info=exec_info, **field_args, **parameter_args
+            _domain_=domain, _origin_=origin, exec_info=exec_info, async_launch=async_launch, streams=streams, **field_args, **parameter_args
         )
 
         if exec_info is not None:
