@@ -77,7 +77,6 @@ def get_gt_pyext_build_opts(
     import dace
 
     template_depth: int = gt_config.build_settings["cpp_template_depth"]
-
     extra_compile_args = dict(
         cxx=[
             "-std=c++14",
@@ -104,7 +103,6 @@ def get_gt_pyext_build_opts(
             "-fvisibility=hidden",
             "--compiler-options",
             "-fPIC",
-            "-ftemplate-depth=1000",
             *extra_compile_args_from_config["nvcc"],
         ],
     )

@@ -16,21 +16,19 @@
 
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Type
 
-import gtc.utils as gtc_utils
 from eve import codegen
 from eve.codegen import MakoTemplate as as_mako
 from gt4py import backend as gt_backend
 from gt4py import definitions as gt_definitions
 from gt4py import gt_src_manager
-from gt4py import utils as gt_utils
-from gt4py.backend import BaseGTBackend, BaseModuleGenerator, CLIBackendMixin, PyExtModuleGenerator
+from gt4py.backend import BaseGTBackend, CLIBackendMixin, PyExtModuleGenerator
 from gt4py.backend.gt_backends import (
     GTCUDAPyModuleGenerator,
     cuda_is_compatible_layout,
     cuda_is_compatible_type,
     make_cuda_layout_map,
 )
-from gt4py.backend.gtc_backend.common import bindings_main_template, pybuffer_to_sid
+from gt4py.backend.gtc_backend.common import pybuffer_to_sid
 from gt4py.backend.gtc_backend.defir_to_gtir import DefIRToGTIR
 from gtc import gtir_to_oir
 from gtc.common import DataType

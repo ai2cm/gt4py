@@ -458,11 +458,11 @@ class CUIRCodegen(codegen.TemplatedGenerator):
         % endif
 
         constexpr int NUM_KERNELS = ${len(_this_node.kernels)};
+        % if _this_node.dependency:
         <%
         dependency_row_ind = _this_node.dependency.row_ind
         dependency_col_ind = _this_node.dependency.col_ind
         %>
-        % if _this_node.dependency:
         constexpr bool DEPENDENCY = true;
         constexpr std::array<int, NUM_KERNELS+1> DEPENDENCY_ROW_IND = {${','.join(str(i) for i in dependency_row_ind)}};
         constexpr std::array<int, ${len(dependency_col_ind)}> DEPENDENCY_COL_IND = {${','.join(str(i) for i in dependency_col_ind)}};
@@ -471,7 +471,6 @@ class CUIRCodegen(codegen.TemplatedGenerator):
         constexpr std::array<int, 1> DEPENDENCY_ROW_IND = { -1 };
         constexpr std::array<int, 1> DEPENDENCY_COL_IND = { -1 };
         % endif
-
 
         using gridtools::int_t;
         using gridtools::uint_t;
@@ -568,7 +567,11 @@ class CUIRCodegen(codegen.TemplatedGenerator):
             % endfor
 
             auto ${name}(domain_t domain){
-                return [domain](${','.join(f'auto&& {p}' for p in params)}, std::array<int64_t, NUM_KERNELS> streams){
+                return [domain](${','.join(f'auto&& {p}' for p in params)}
+                % if _this_node.kernels:
+                , std::array<int64_t, NUM_KERNELS> streams
+                % endif
+                ) {
                     auto tmp_alloc = sid::device::make_cached_allocator(&cuda_util::cuda_malloc<char[]>);
                     const int i_size = domain[0];
                     const int j_size = domain[1];
