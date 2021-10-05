@@ -211,6 +211,7 @@ class GTCCudaBindingsCodegen(codegen.TemplatedGenerator):
         return generated_code
 
 
+# TODO(eddied): Determine whether this class is needed in async mode...
 class GTCCudaPyModuleGenerator(PyExtModuleGenerator):
     def generate_imports(self) -> str:
         source = """
@@ -272,7 +273,7 @@ class GTCCudaBackend(BaseGTBackend, CLIBackendMixin):
         "is_compatible_type": cuda_is_compatible_type,
     }
     PYEXT_GENERATOR_CLASS = GTCCudaExtGenerator  # type: ignore
-    MODULE_GENERATOR_CLASS = GTCCudaPyModuleGenerator
+    MODULE_GENERATOR_CLASS = GTCUDAPyModuleGenerator
     GT_BACKEND_T = "gpu"
 
     def generate_extension(self, **kwargs: Any) -> Tuple[str, str]:
