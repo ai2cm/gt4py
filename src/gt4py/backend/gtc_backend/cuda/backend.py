@@ -19,11 +19,11 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Type
 import gtc.utils as gtc_utils
 from eve import codegen
 from eve.codegen import MakoTemplate as as_mako
-from gt4py import definitions as gt_definitions
-from gt4py import utils as gt_utils
 from gt4py import backend as gt_backend
+from gt4py import definitions as gt_definitions
 from gt4py import gt_src_manager
-from gt4py.backend import BaseGTBackend, CLIBackendMixin, PyExtModuleGenerator, BaseModuleGenerator
+from gt4py import utils as gt_utils
+from gt4py.backend import BaseGTBackend, BaseModuleGenerator, CLIBackendMixin, PyExtModuleGenerator
 from gt4py.backend.gt_backends import (
     GTCUDAPyModuleGenerator,
     cuda_is_compatible_layout,
@@ -34,7 +34,14 @@ from gt4py.backend.gtc_backend.common import bindings_main_template, pybuffer_to
 from gt4py.backend.gtc_backend.defir_to_gtir import DefIRToGTIR
 from gtc import gtir_to_oir
 from gtc.common import DataType
-from gtc.cuir import cuir, cuir_codegen, extent_analysis, kernel_fusion, oir_to_cuir, dependency_analysis
+from gtc.cuir import (
+    cuir,
+    cuir_codegen,
+    dependency_analysis,
+    extent_analysis,
+    kernel_fusion,
+    oir_to_cuir,
+)
 from gtc.passes.gtir_pipeline import GtirPipeline
 from gtc.passes.oir_optimizations.pruning import NoFieldAccessPruning
 from gtc.passes.oir_optimizations.remove_regions import RemoveUnexecutedRegions
@@ -203,8 +210,8 @@ class GTCCudaBindingsCodegen(codegen.TemplatedGenerator):
 
         return generated_code
 
-class GTCCudaPyModuleGenerator(PyExtModuleGenerator):
 
+class GTCCudaPyModuleGenerator(PyExtModuleGenerator):
     def generate_imports(self) -> str:
         source = """
 import cupy
@@ -244,38 +251,6 @@ def pyext_module(self):
 
         return "\n".join([f + "._set_device_modified()" for f in output_field_names])
 
-    def generate_implementation(self) -> str:
-        definition_ir = self.builder.definition_ir
-        sources = gt_utils.text.TextBlock(indent_size=BaseModuleGenerator.TEMPLATE_INDENT_SIZE)
-
-        args = []
-        api_fields = set(field.name for field in definition_ir.api_fields)
-        for arg in definition_ir.api_signature:
-            if arg.name not in self.args_data.unreferenced:
-                args.append(arg.name)
-                if arg.name in api_fields:
-                    args.append("list(_origin_['{}'])".format(arg.name))
-
-        # only generate implementation if any multi_stages are present. e.g. if no statement in the
-        # stencil has any effect on the API fields, this may not be the case since they could be
-        # pruned.
-        if self._has_effect():
-            source = """
-# Load or generate a GTComputation object for the current domain size
-num_kernels = self.pyext_module.num_kernels()
-if isinstance(streams, int):
-    streams = [streams]*num_kernels
-self.pyext_module.run_computation(list(_domain_), {run_args}, exec_info, list(streams))
-""".format(
-                run_args=", ".join(args)
-            )
-            sources.extend(source.splitlines())
-        else:
-            sources.extend("\n")
-
-        return sources.text+"""
-if not async_launch: cupy.cuda.Device(0).synchronize()
-        """
 
 @gt_backend.register
 class GTCCudaBackend(BaseGTBackend, CLIBackendMixin):
@@ -286,6 +261,7 @@ class GTCCudaBackend(BaseGTBackend, CLIBackendMixin):
         **BaseGTBackend.GT_BACKEND_OPTS,
         "device_sync": {"versioning": True, "type": bool},
         "block_size": {"versioning": True, "type": Tuple[int, int]},
+        "async_launch": {"versioning": True, "type": bool},
     }
     languages = {"computation": "cuda", "bindings": ["python"]}
     storage_info = {

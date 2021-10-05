@@ -14,19 +14,27 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from eve import NodeTranslator
-from . import cuir
-from typing import List, Tuple, Optional, Set
 from itertools import accumulate, chain
+from typing import List, Optional, Set
+
+from eve import NodeTranslator
+
+from . import cuir
+
 
 class DependencyAnalysis(NodeTranslator):
     """
     Dependency analysis for CUIR kernels, store dependency array in Program node
     """
+
     # TODO: ignore false dependency introduced by aliasing temporary variables
     def visit_Program(self, node: cuir.Program) -> cuir.Program:
-        dependency_arr_full: List[List[int]] = [[] for _ in range(len(node.kernels))] # with full transitive relation
-        dependency_arr: List[List[int]] = [[] for _ in range(len(node.kernels))] # without transitive relation
+        dependency_arr_full: List[List[int]] = [
+            [] for _ in range(len(node.kernels))
+        ]  # with full transitive relation
+        dependency_arr: List[List[int]] = [
+            [] for _ in range(len(node.kernels))
+        ]  # without transitive relation
         writes = []
         reads = []
         for i in range(len(node.kernels)):
@@ -40,10 +48,8 @@ class DependencyAnalysis(NodeTranslator):
                 .to_set()
             )
             reads.append(
-                kernel.iter_tree()
-                .if_isinstance(cuir.FieldAccess)
-                .getattr("name")
-                .to_set() - writes[i]
+                kernel.iter_tree().if_isinstance(cuir.FieldAccess).getattr("name").to_set()
+                - writes[i]
             )
             for j in reversed(range(0, i)):
                 dep_flag = False
@@ -66,10 +72,13 @@ class DependencyAnalysis(NodeTranslator):
         row_ind = list(accumulate([len(arr) for arr in dependency_arr], initial=0))
         col_ind = list(chain.from_iterable(dependency_arr))
         return cuir.Program(
-            name=node.name, params=node.params,
+            name=node.name,
+            params=node.params,
             temporaries=node.temporaries,
-            kernels=node.kernels, dependency=cuir.DependencyGraph(row_ind=row_ind, col_ind=col_ind)
+            kernels=node.kernels,
+            dependency=cuir.DependencyGraph(row_ind=row_ind, col_ind=col_ind),
         )
+
 
 class FuseKernels(NodeTranslator):
     """
@@ -82,8 +91,10 @@ class FuseKernels(NodeTranslator):
     def mark_fusable_kernels(self, graph: cuir.DependencyGraph):
         row_ind = graph.row_ind
         col_ind = graph.col_ind
-        num_kernels = len(row_ind)-1
-        degree_in: List[int] = [row_ind[i+1] - row_ind[i] for i in range(num_kernels)] # i -> degree_in_i
+        num_kernels = len(row_ind) - 1
+        degree_in: List[int] = [
+            row_ind[i + 1] - row_ind[i] for i in range(num_kernels)
+        ]  # i -> degree_in_i
         degree_out: List[int] = [col_ind.count(i) for i in range(num_kernels)]
         unfused_kernels: Set[int] = set(range(num_kernels))
 
@@ -119,15 +130,16 @@ class FuseKernels(NodeTranslator):
 
     @staticmethod
     def is_parallel(kernel: cuir.Kernel) -> bool:
-        parallel = [
-            loop.loop_order == cuir.LoopOrder.PARALLEL for loop in kernel.vertical_loops
-        ]
+        parallel = [loop.loop_order == cuir.LoopOrder.PARALLEL for loop in kernel.vertical_loops]
         assert all(parallel) or not any(parallel), "Mixed k-parallelism in kernel"
         return any(parallel)
 
-    def visit_VerticalLoop(self, node: cuir.VerticalLoop, loop_order: Optional[cuir.LoopOrder]) -> cuir.VerticalLoop:
+    def visit_VerticalLoop(
+        self, node: cuir.VerticalLoop, loop_order: Optional[cuir.LoopOrder]
+    ) -> cuir.VerticalLoop:
         pass
 
     def visit_Program(self, node: cuir.Program) -> cuir.Program:
         fusable_kernels = self.mark_fusable_kernels(node.dependency)
         fused_kernel_inds: List[Optional[int]] = [None] * len(fusable_kernels)
+        return node

@@ -317,5 +317,5 @@ class OIRToCUIR(eve.NodeTranslator):
             params=self.visit(node.params),
             temporaries=temporaries,
             kernels=kernels,
-            dependency=None
+            dependency=None,
         )

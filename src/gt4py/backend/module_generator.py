@@ -480,8 +480,19 @@ class PyExtModuleGenerator(BaseModuleGenerator):
         # stencil has any effect on the API fields, this may not be the case since they could be
         # pruned.
         if self._has_effect():
+            async_code = (
+                """
+num_kernels = self.pyext_module.num_kernels()
+if isinstance(streams, int):
+streams = [streams]*num_kernels
+self.pyext_module.run_computation(list(_domain_), {run_args}, exec_info, list(streams))
+            """
+                if self.builder.options.backend_opts.get("async_launch", False)
+                else ""
+            )
             source = textwrap.dedent(
                 f"""
+                {async_code}
                 # Load or generate a GTComputation object for the current domain size
                 pyext_module.run_computation({",".join(["list(_domain_)", *args, "exec_info"])})
                 """
@@ -496,10 +507,12 @@ class PyExtModuleGenerator(BaseModuleGenerator):
 class CUDAPyExtModuleGenerator(PyExtModuleGenerator):
     def generate_implementation(self) -> str:
         source = super().generate_implementation()
-        if self.builder.options.backend_opts.get("device_sync", True):
+        backend_opts = self.builder.options.backend_opts
+        if backend_opts.get("device_sync", True):
+            async_code = "if not async_launch: " if backend_opts.get("async_launch", False) else ""
             source += textwrap.dedent(
-                """
-                    cupy.cuda.Device(0).synchronize()
+                f"""
+                    {async_code}cupy.cuda.Device(0).synchronize()
                 """
             )
         return source

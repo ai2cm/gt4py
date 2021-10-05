@@ -169,7 +169,7 @@ class TaskletCodegen(codegen.TemplatedGenerator):
         jmin = get_axis_bound_str(node.j.start, "__J")
         jmax = get_axis_bound_str(node.j.end, "__J")
         return f"i >= {imin} and i < {imax} and j >= {jmin} and j < {jmax}"
-    
+
     class RemoveCastInIndexVisitor(eve.NodeTranslator):
         def visit_FieldAccess(self, node: oir.FieldAccess):
             if node.data_index:
