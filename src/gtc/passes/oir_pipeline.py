@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from typing import Callable, Dict, Optional, Protocol, Sequence, Tuple, Type, Union
+from typing import Callable, Dict, List, Optional, Protocol, Sequence, Tuple, Type, Union
 
 from eve.visitors import NodeVisitor
 from gtc import oir
@@ -32,7 +32,6 @@ from gtc.passes.oir_optimizations.horizontal_execution_merging import GreedyMerg
 from gtc.passes.oir_optimizations.inlining import MaskInlining
 from gtc.passes.oir_optimizations.mask_stmt_merging import MaskStmtMerging
 from gtc.passes.oir_optimizations.pruning import NoFieldAccessPruning
-from gtc.passes.oir_optimizations.remove_regions import RemoveUnexecutedRegions
 from gtc.passes.oir_optimizations.temporaries import (
     LocalTemporariesToScalars,
     WriteBeforeReadTemporariesToScalars,
@@ -58,13 +57,17 @@ class OirPipeline:
     May only call existing passes and may not contain any pass logic itself.
     """
 
-    def __init__(self, node: oir.Stencil):
+    def __init__(
+        self, node: oir.Stencil, step_order: Optional[Union[Dict[str, int], Sequence[str]]] = None
+    ):
         self.oir = node
         self._cache: Dict[Tuple[int, ...], oir.Stencil] = {}
+        if isinstance(step_order, Sequence):
+            step_order = {step: index for index, step in enumerate(step_order)}
+        self._step_order = step_order
 
-    def steps(self) -> Sequence[PASS_T]:
+    def default_steps(self) -> List[PASS_T]:
         return [
-            RemoveUnexecutedRegions,
             graph_merge_horizontal_executions,
             GreedyMerging,
             AdjacentLoopMerging,
@@ -81,17 +84,26 @@ class OirPipeline:
             FillFlushToLocalKCaches,
         ]
 
-    def steps_from_names(self, pass_names: Sequence[str]) -> Sequence[PASS_T]:
-        steps = []
-        if pass_names:
-            pass_names = list(pass_names)
-            for step in self.steps():
-                if step.__name__ in pass_names:
-                    steps.append(step)
-                    pass_names.remove(step.__name__)
-            if pass_names:
-                raise RuntimeError(f"Unknown OIR pass names: {pass_names}")
-        return steps
+    def _step_map(self) -> Dict[str, PASS_T]:
+        return {step.__name__: step for step in self.default_steps()}
+
+    def steps(self) -> Sequence[PASS_T]:
+        step_list = self.default_steps()
+        if self._step_order:
+            step_map = self._step_map()
+            for step_name in self._step_order:
+                if step_name in step_map:
+                    step = step_map[step_name]
+                    step_index = self._step_order[step_name]
+                    curr_index = step_list.index(step)
+                    step_list.remove(step)
+                    if step_index >= 0:
+                        if step_index > curr_index:
+                            step_index -= 1
+                        step_list.insert(step_index, step)
+                else:
+                    raise RuntimeError(f"Unknown OIR step name: {step_name}")
+        return step_list
 
     def apply(self, steps: Sequence[PASS_T]) -> oir.Stencil:
         result = self.oir
