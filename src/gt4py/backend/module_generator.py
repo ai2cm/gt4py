@@ -483,7 +483,7 @@ class PyExtModuleGenerator(BaseModuleGenerator):
             async_code = async_args = ""
             if self.builder.options.backend_opts.get("async_launch", False):
                 async_code = """
-num_kernels = self.pyext_module.num_kernels()
+num_kernels = pyext_module.num_kernels()
 if isinstance(streams, int): streams = [streams] * num_kernels
                 """
                 async_args = ", list(streams)"
@@ -493,8 +493,8 @@ if isinstance(streams, int): streams = [streams] * num_kernels
             source = textwrap.dedent(
                 f"""
                 {async_code}
-                # Load or generate a GTComputation object for the current domain size
-                pyext_module.run_computation({",".join(["list(_domain_)", *args, "exec_info"])}{async_args})
+# Load or generate a GTComputation object for the current domain size
+pyext_module.run_computation({",".join(["list(_domain_)", *args, "exec_info"])}{async_args})
                 """
             )
             sources.extend(source.splitlines())

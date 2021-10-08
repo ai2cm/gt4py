@@ -23,17 +23,20 @@ import ast
 import inspect
 import warnings
 from collections import deque
-from copy import deepcopy
 from dataclasses import dataclass
 from time import sleep
-from typing import Any, Callable, Deque, Dict, Iterable, List, Optional, Set, Tuple, Union
+from typing import Any, Deque, Dict, Iterable, List, Optional, Set, Tuple, Union
 from uuid import uuid4
 
 import astor
-import cupy.cuda
-from graphviz import Digraph
+import cupy as cp
 
-from gt4py import AccessKind, Boundary, FieldInfo
+try:
+    from graphviz import Digraph
+except ModuleNotFoundError:
+    Digraph = None
+
+from gt4py import AccessKind, FieldInfo
 from gt4py.gtscript import stencil as gtstencil
 from gt4py.stencil_object import StencilObject
 from gt4py.storage import Storage
@@ -43,7 +46,7 @@ from gt4py.storage import Storage
 class InvokedStencil:
     stencil: StencilObject
     access_info: Tuple[Set[str], Set[str]]
-    done_event: cupy.cuda.Event
+    done_event: cp.cuda.Event
     id: int
     region: Optional[Tuple[int, int, int, int]]  # x_lo, x_hi, y_lo, y_hi INCLUSIVE on both side
 
@@ -117,7 +120,7 @@ class AsyncContext:
         region_analysis=False,
         validate_args=False,
     ):
-        self.stream_pool: List[Optional[cupy.cuda.Stream]] = []
+        self.stream_pool: List[Optional[cp.cuda.Stream]] = []
         self.runtime_graph: RuntimeGraph = RuntimeGraph()
         self.add_streams(num_streams)
         self.last_access_stencil: Dict[
@@ -203,7 +206,7 @@ class AsyncContext:
             self._graph.render(cleanup=cleanup, format="pdf")
 
     def add_streams(self, num_streams):
-        self.stream_pool.extend(cupy.cuda.Stream(non_blocking=True) for _ in range(num_streams))
+        self.stream_pool.extend(cp.cuda.Stream(non_blocking=True) for _ in range(num_streams))
 
     def allocate_streams(self, num_streams):
         streams = []
@@ -367,7 +370,7 @@ class AsyncContext:
         access_info: Tuple[Set[str], Set[str]],
         stencil_id: int,
         stencil_region: Optional[Tuple[int, int, int, int]],
-    ) -> List[cupy.cuda.Event]:
+    ) -> List[cp.cuda.Event]:
         # R -> W, W -> W, W -> R
         dep_events = []
         reads, writes = access_info
@@ -423,7 +426,7 @@ class AsyncContext:
         self,
         stencil: StencilObject,
         access_info: Tuple[Set[str], Set[str]],
-        done_event: cupy.cuda.Event,
+        done_event: cp.cuda.Event,
         stencil_id: int,
         stencil_region: Optional[Tuple[int, int, int, int]],
     ):
@@ -446,7 +449,7 @@ class AsyncContext:
                 sleep(self.sleep_time)
                 self.free_finished_stencils()
         else:
-            cupy.cuda.Stream.null.synchronize()
+            cp.cuda.Stream.null.synchronize()
             self.stat.finished_stencils = self.stat.scheduled_stencils
 
     def wait_finish(self):
@@ -546,7 +549,7 @@ class AsyncContext:
 
         # insert events to record when the stencil finishes
         done_events = [
-            cupy.cuda.Event(block=False, disable_timing=True) for _ in range(num_streams)
+            cp.cuda.Event(block=False, disable_timing=True) for _ in range(num_streams)
         ]
         for i in range(1, num_streams):
             done_events[i].record(stream_pool[i])
