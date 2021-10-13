@@ -491,8 +491,7 @@ if isinstance(streams, int): streams = [streams] * num_kernels
             elif self.backend_name == "gtc:cuda":
                 async_args = ", [0]"
             source = textwrap.dedent(
-                f"""
-                {async_code}
+                f"""{async_code}
 # Load or generate a GTComputation object for the current domain size
 pyext_module.run_computation({",".join(["list(_domain_)", *args, "exec_info"])}{async_args})
                 """

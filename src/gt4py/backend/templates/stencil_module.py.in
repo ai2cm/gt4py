@@ -125,6 +125,10 @@ class {{ class_name }}(StencilObject):
     def options(self) -> dict:
         return type(self)._gt_options_
 
+    @property
+    def pyext_module(self) -> object:
+        return pyext_module
+
     def __call__(
         self, {{ stencil_signature }}, domain=None, origin=None, validate_args=True, exec_info=None, async_launch=False, streams=0
     ):
