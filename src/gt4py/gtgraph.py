@@ -462,7 +462,9 @@ class AsyncContext:
         if self.blocking:
             stencil(*args, **kwargs, validate_args=self.validate_args)
         elif stencil.backend == "gtc:cuda":
-            if not self.concurrent:
+            if self.concurrent:
+                self.async_schedule(stencil, *args, **kwargs)
+            else:
                 num_kernels = stencil.pyext_module.num_kernels()
                 stencil(
                     *args,
@@ -471,8 +473,6 @@ class AsyncContext:
                     validate_args=self.validate_args,
                     **kwargs,
                 )
-            elif not self.blocking:
-                self.async_schedule(stencil, args, kwargs)
         else:
             warnings.warn(
                 f"Backend: {stencil.backend} does not support async launching, use blocking behavior instead"
@@ -481,7 +481,7 @@ class AsyncContext:
             stencil(*args, **kwargs, validate_args=self.validate_args)
         self.stat.scheduled_stencils += 1
 
-    def async_schedule(self, stencil: StencilObject, args, kwargs):
+    def async_schedule(self, stencil: StencilObject, *args, **kwargs):
         """
         Step 0: remove finished calls & free streams
         Step 1: mark fields if first meet
@@ -534,18 +534,31 @@ class AsyncContext:
                 stream.wait_event(dep_event)
 
         # Launch stencil
+        streams = stream_pool
         if num_streams == 1:
-            streams = stream_pool * num_kernels
-        else:
-            streams = stream_pool
+            streams = streams * num_kernels
         stream_ptrs = [stream.ptr for stream in streams]
-        stencil(
-            *args,
-            async_launch=True,
-            streams=stream_ptrs,
-            validate_args=self.validate_args,
-            **kwargs,
-        )
+
+        arg_names = kwargs.pop("arg_names", [])
+        if arg_names:
+            args_as_kwargs = dict(zip(arg_names, args))
+            kwargs["_origin_"] = kwargs.pop("origin")
+            kwargs["_domain_"] = kwargs.pop("domain")
+
+            stencil.run(
+                async_launch=True,
+                streams=stream_ptrs,
+                **args_as_kwargs,
+                **kwargs,
+            )
+        else:
+            stencil(
+                *args,
+                async_launch=True,
+                streams=stream_ptrs,
+                validate_args=self.validate_args,
+                **kwargs,
+            )
 
         # insert events to record when the stencil finishes
         done_events = [
