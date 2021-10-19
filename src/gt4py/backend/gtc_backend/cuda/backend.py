@@ -42,7 +42,6 @@ from gtc.cuir import (
 )
 from gtc.passes.gtir_pipeline import GtirPipeline
 from gtc.passes.oir_optimizations.pruning import NoFieldAccessPruning
-from gtc.passes.oir_optimizations.remove_regions import RemoveUnexecutedRegions
 from gtc.passes.oir_pipeline import OirPipeline
 
 
@@ -68,15 +67,17 @@ class GTCCudaExtGenerator:
         cuir = dependency_analysis.DependencyAnalysis().visit(cuir)
 
         block_size = self.backend.builder.options.backend_opts.get("block_size", None)
+        streams = self.backend.builder.options.backend_opts.get("streams", None)
         format_source = self.backend.builder.options.format_source
         implementation = cuir_codegen.CUIRCodegen.apply(
-            cuir, block_size=block_size, format_source=format_source
+            cuir, block_size=block_size, streams=streams, format_source=format_source
         )
 
         bindings = GTCCudaBindingsCodegen.apply(
             cuir,
             module_name=self.module_name,
             backend=self.backend,
+            streams=streams,
             format_source=format_source,
         )
 
@@ -151,8 +152,11 @@ class GTCCudaBindingsCodegen(codegen.TemplatedGenerator):
         namespace py = ::pybind11;
 
         extern "C" void run_computation_${name}(
-            ${','.join(["std::array<gt::uint_t, 3> domain", *entry_params, 'py::object exec_info'])},
-            std::array<int64_t, NUM_KERNELS> streams){
+            ${','.join(["std::array<gt::uint_t, 3> domain", *entry_params, 'py::object exec_info'])}
+            % if streams:
+            , std::array<int64_t, NUM_KERNELS> streams
+            % endif
+            ) {
                 if (!exec_info.is(py::none()))
                 {
                     auto exec_info_dict = exec_info.cast<py::dict>();
@@ -161,7 +165,12 @@ class GTCCudaBindingsCodegen(codegen.TemplatedGenerator):
                             std::chrono::high_resolution_clock::now().time_since_epoch()).count())/1e9;
                 }
 
-                ${name}(domain)(${','.join(sid_params)}, streams);
+                ${name}(domain)(
+                    ${','.join(sid_params)}
+                    % if streams:
+                    , streams
+                    % endif
+                );
 
                 if (!exec_info.is(py::none()))
                 {
@@ -175,7 +184,7 @@ class GTCCudaBindingsCodegen(codegen.TemplatedGenerator):
 
         PYBIND11_MODULE(${module_name}, m) {
             m.def("run_computation", run_computation_${name}, "Runs the given computation");
-
+        % if streams:
         m.def("num_kernels", []() {
                 return NUM_KERNELS;
             }, "Get number of CUDA kernels");
@@ -191,6 +200,7 @@ class GTCCudaBindingsCodegen(codegen.TemplatedGenerator):
         m.def("dependency_col_ind", []() {
                 return DEPENDENCY_COL_IND;
             }, "Get col ind of dependency matrix stored in csr format");
+        % endif
         }
         """
     )
@@ -254,8 +264,8 @@ class GTCCudaBackend(BaseGTBackend, CLIBackendMixin):
     options = {
         **BaseGTBackend.GT_BACKEND_OPTS,
         "device_sync": {"versioning": True, "type": bool},
-        "block_size": {"versioning": True, "type": Tuple[int, int]},
-        "async_launch": {"versioning": True, "type": bool},
+        "block_size": {"versioning": True, "type": tuple},
+        "streams": {"versioning": True, "type": list},
     }
     languages = {"computation": "cuda", "bindings": ["python"]}
     storage_info = {
