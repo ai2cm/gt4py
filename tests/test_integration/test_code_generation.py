@@ -200,6 +200,25 @@ def test_lower_dimensional_inputs(backend):
 
 
 @pytest.mark.parametrize("backend", ALL_BACKENDS)
+def test_lower_dimensional_inputs_2d_to_3d_forward(backend):
+    @gtscript.stencil(backend=backend)
+    def copy_2to3(
+        inp: gtscript.Field[gtscript.IJ, np.float_], outp: gtscript.Field[gtscript.IJK, np.float_]
+    ):
+        with computation(FORWARD), interval(...):
+            outp[0, 0, 0] = inp
+
+    inp_f = gt_storage.from_array(np.random.randn(10, 10), default_origin=(0, 0), backend=backend)
+    outp_f = gt_storage.from_array(
+        np.random.randn(10, 10, 10), default_origin=(0, 0, 0), backend=backend
+    )
+    copy_2to3(inp_f, outp_f)
+    inp_f.device_to_host()
+    outp_f.device_to_host()
+    assert np.allclose(np.asarray(outp_f), np.asarray(inp_f)[:, :, np.newaxis])
+
+
+@pytest.mark.parametrize("backend", ALL_BACKENDS)
 def test_lower_dimensional_masked(backend):
     @gtscript.stencil(backend=backend)
     def copy_2to3(
@@ -440,7 +459,7 @@ def test_write_data_dim_indirect_addressing(backend):
     if backend in (backend.values[0] for backend in LEGACY_GRIDTOOLS_BACKENDS):
         with pytest.raises(ValueError):
             gtscript.stencil(definition=stencil, backend=backend)
-    elif backend != "gtc:numpy":
+    else:
         gtscript.stencil(definition=stencil, backend=backend)(input_field, output_field, index := 1)
         assert output_field[0, 0, 0, index] == 1
 
@@ -465,6 +484,6 @@ def test_read_data_dim_indirect_addressing(backend):
     if backend in (backend.values[0] for backend in LEGACY_GRIDTOOLS_BACKENDS):
         with pytest.raises(ValueError):
             gtscript.stencil(definition=stencil, backend=backend)
-    elif backend != "gtc:numpy":
+    else:
         gtscript.stencil(definition=stencil, backend=backend)(input_field, output_field, 1)
         assert output_field[0, 0, 0] == 1

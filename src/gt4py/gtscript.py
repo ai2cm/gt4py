@@ -21,17 +21,23 @@ definitions for the keywords of the DSL.
 """
 
 import collections
+import copy
 import inspect
 import numbers
+import os
+import re
 import types
-from typing import Callable, Dict, Type
+from typing import Callable, Dict, Type, Union
 
+import dace
 import numpy as np
 
+import gt4py.backend
 from gt4py import definitions as gt_definitions
 from gt4py import utils as gt_utils
 from gt4py.lazy_stencil import LazyStencil
 from gt4py.stencil_builder import StencilBuilder
+from gt4py.utils import shash
 
 
 # GTScript builtins
@@ -90,7 +96,6 @@ __all__ = list(builtins) + ["function", "stencil", "lazy_stencil"]
 
 __externals__ = "Placeholder"
 __gtscript__ = "Placeholder"
-
 
 _VALID_DATA_TYPES = (
     bool,
@@ -358,6 +363,290 @@ def lazy_stencil(
     return _decorator(definition)
 
 
+def as_sdfg(*args, **kwargs) -> dace.SDFG:
+    def _decorator(definition_func):
+
+        from gt4py.backend.gtc_backend.dace.backend import expand_and_wrap_sdfg, to_device
+        from gt4py.backend.gtc_backend.defir_to_gtir import DefIRToGTIR
+        from gt4py.definitions import BuildOptions
+        from gt4py.frontend.gtscript_frontend import GTScriptFrontend
+        from gtc.dace.oir_to_dace import OirSDFGBuilder
+        from gtc.dace.utils import array_dimensions
+        from gtc.gtir_to_oir import GTIRToOIR
+        from gtc.passes.gtir_pipeline import GtirPipeline
+        from gtc.passes.oir_optimizations.caches import FillFlushToLocalKCaches
+        from gtc.passes.oir_optimizations.inlining import MaskInlining
+        from gtc.passes.oir_optimizations.mask_stmt_merging import MaskStmtMerging
+
+        definition_ir = GTScriptFrontend.generate(
+            definition_func,
+            externals=kwargs,
+            options=BuildOptions(
+                name=definition_func.__name__,
+                module=inspect.currentframe().f_back.f_globals["__name__"],
+            ),
+        )
+        gt_ir = DefIRToGTIR.apply(definition_ir)
+        gt_ir = GtirPipeline(gt_ir).full()
+        from gtc.passes.oir_pipeline import OirPipeline
+
+        oir = OirPipeline(GTIRToOIR().visit(gt_ir)).full(
+            skip=[
+                MaskStmtMerging,
+                MaskInlining,
+                FillFlushToLocalKCaches,
+            ]
+        )
+
+        sdfg: dace.SDFG = OirSDFGBuilder().visit(oir)
+        backend = gt4py.backend.from_name(kwargs.get("backend", "gtc:dace"))
+        to_device(sdfg, device=backend.storage_info["device"])
+        sdfg = expand_and_wrap_sdfg(gt_ir, sdfg, layout_map=backend.storage_info["layout_map"])
+
+        return sdfg
+
+    if not kwargs and len(args) == 1:
+        return _decorator(args[0])
+    else:
+        return _decorator
+
+
+class SDFGWrapper:
+
+    loaded_compiled_sdfgs: Dict[str, dace.SDFG] = dict()
+
+    def __init__(
+        self,
+        definition,
+        domain,
+        origin,
+        *,
+        dtypes=None,
+        externals=None,
+        format_source=True,
+        name=None,
+        rebuild=False,
+        **kwargs,
+    ):
+
+        self.func = definition
+
+        self.domain = domain
+        self.origin = origin
+        self.backend = kwargs.get("backend", "gtc:dace")
+        if "backend" in kwargs:
+            del kwargs["backend"]
+        self.device = gt4py.backend.from_name(self.backend).storage_info["device"]
+        self.stencil_kwargs = {
+            **kwargs,
+            **dict(
+                dtypes=dtypes,
+                format_source=format_source,
+                name=name,
+                rebuild=rebuild,
+                externals=externals,
+            ),
+        }
+        self.stencil_object = None
+        self.filename = None
+        self._sdfg = None
+
+    def __sdfg__(self, *args, **kwargs):
+
+        if self.stencil_object is None:
+            self.stencil_object = stencil(
+                definition=self.func, backend="gtc:numpy", **self.stencil_kwargs
+            )
+
+            basename = os.path.splitext(self.stencil_object._file_name)[0]
+            self.filename = (
+                basename + "_wrapper_" + str(shash(self.device, self.origin, self.domain)) + ".sdfg"
+            )
+
+        # check if same sdfg already cached in memory
+        if self._sdfg is not None:
+            return copy.deepcopy(self._sdfg)
+        elif self.filename in SDFGWrapper.loaded_compiled_sdfgs:
+            self._sdfg = SDFGWrapper.loaded_compiled_sdfgs[self.filename]
+            return copy.deepcopy(self._sdfg)
+
+        # check if same sdfg already cached on disk
+        try:
+            self._sdfg = dace.SDFG.from_file(self.filename)
+            print("reused (__sdfg__):", self.filename)
+            SDFGWrapper.loaded_compiled_sdfgs[self.filename] = self._sdfg
+            return copy.deepcopy(self._sdfg)
+        except FileNotFoundError:
+            pass
+        except Exception:
+            raise
+
+        # otherwise, wrap and save sdfg from scratch
+        inner_sdfg = as_sdfg(backend=self.backend, **(self.stencil_kwargs.get("externals", {})))(
+            self.func
+        )
+        self._sdfg = dace.SDFG("SDFGWrapper_" + inner_sdfg.name)
+        state = self._sdfg.add_state("SDFGWrapper_" + inner_sdfg.name + "_state")
+
+        inputs = set()
+        outputs = set()
+        for inner_state in inner_sdfg.nodes():
+            for node in inner_state.nodes():
+                if (
+                    not isinstance(node, dace.nodes.AccessNode)
+                    or inner_sdfg.arrays[node.data].transient
+                ):
+                    continue
+                if node.access != dace.dtypes.AccessType.WriteOnly:
+                    inputs.add(node.data)
+                if node.access != dace.dtypes.AccessType.ReadOnly:
+                    outputs.add(node.data)
+
+        nsdfg = state.add_nested_sdfg(inner_sdfg, None, inputs, outputs)
+        for name, array in inner_sdfg.arrays.items():
+            if isinstance(array, dace.data.Array) and not array.transient:
+                axes = self.stencil_object.field_info[name].axes
+
+                shape = [f"__{name}_{axis}_size" for axis in axes] + [
+                    str(d) for d in self.stencil_object.field_info[name].data_dims
+                ]
+
+                self._sdfg.add_array(
+                    name,
+                    dtype=array.dtype,
+                    strides=array.strides,
+                    shape=shape,
+                    storage=dace.StorageType.GPU_Global
+                    if self.device == "gpu"
+                    else dace.StorageType.Default,
+                )
+                if isinstance(self.origin, tuple):
+                    origin = [o for a, o in zip("IJK", self.origin) if a in axes]
+                else:
+                    origin = self.origin.get(name, self.origin.get("_all_", None))
+                    if len(origin) == 3:
+                        origin = [o for a, o in zip("IJK", origin) if a in axes]
+
+                subset_strs = [
+                    f"{o - e}:{o - e + s}"
+                    for o, e, s in zip(
+                        origin,
+                        self.stencil_object.field_info[name].boundary.lower_indices,
+                        inner_sdfg.arrays[name].shape,
+                    )
+                ]
+                subset_strs += [f"0:{d}" for d in self.stencil_object.field_info[name].data_dims]
+
+                if name in inputs:
+                    state.add_edge(
+                        state.add_read(name),
+                        None,
+                        nsdfg,
+                        name,
+                        dace.Memlet.simple(name, ",".join(subset_strs)),
+                    )
+                if name in outputs:
+                    state.add_edge(
+                        nsdfg,
+                        name,
+                        state.add_write(name),
+                        None,
+                        dace.Memlet.simple(name, ",".join(subset_strs)),
+                    )
+
+        for symbol in nsdfg.sdfg.free_symbols:
+            if symbol not in self._sdfg.symbols:
+                self._sdfg.add_symbol(symbol, nsdfg.sdfg.symbols[symbol])
+
+        if any(d == 0 for d in self.domain):
+            states = self._sdfg.states()
+            assert len(states) == 1
+            for node in states[0].nodes():
+                state.remove_node(node)
+        ival, jval, kval = self.domain[0], self.domain[1], self.domain[2]
+        for sdfg in self._sdfg.all_sdfgs_recursive():
+            if sdfg.parent_nsdfg_node is not None:
+                symmap = sdfg.parent_nsdfg_node.symbol_mapping
+
+                if '__I' in symmap:
+                    ival = symmap['__I']
+                    del symmap['__I']
+                if '__J' in symmap:
+                    jval = symmap['__J']
+                    del symmap['__J']
+                if '__K' in symmap:
+                    kval = symmap['__K']
+                    del symmap['__K']
+
+            sdfg.replace('__I', ival)
+            if '__I' in sdfg.symbols:
+                sdfg.remove_symbol('__I')
+            sdfg.replace('__J', jval)
+            if '__J' in sdfg.symbols:
+                sdfg.remove_symbol('__J')
+            sdfg.replace('__K', kval)
+            if '__K' in sdfg.symbols:
+                sdfg.remove_symbol('__K')
+
+            for val in ival, jval, kval:
+                sym = dace.symbolic.pystr_to_symbolic(val)
+                for fsym in sym.free_symbols:
+                    if sdfg.parent_nsdfg_node is not None:
+                        sdfg.parent_nsdfg_node.symbol_mapping[str(fsym)] = fsym
+                    if fsym not in sdfg.symbols:
+                        if fsym in sdfg.parent_sdfg.symbols:
+                            sdfg.add_symbol(str(fsym), stype=sdfg.parent_sdfg.symbols[str(fsym)])
+                        else:
+                            sdfg.add_symbol(str(fsym), stype=dace.dtypes.int32)
+
+        for _, name, array in self._sdfg.arrays_recursive():
+            if array.transient:
+                array.lifetime = dace.dtypes.AllocationLifetime.SDFG
+
+        self._sdfg.arg_names = [arg for arg in self.func.__annotations__.keys() if arg != "return"]
+        for arg in self._sdfg.arg_names:
+            if (
+                arg in self.stencil_object.field_info
+                and self.stencil_object.field_info[arg] is None
+            ):
+                shape = tuple(
+                    dace.symbolic.symbol(f"__{arg}_{str(axis)}_size")
+                    for axis in self.func.__annotations__[arg].axes
+                )
+                strides = tuple(
+                    dace.symbolic.symbol(f"__{arg}_{str(axis)}_stride")
+                    for axis in self.func.__annotations__[arg].axes
+                )
+                self._sdfg.add_array(
+                    arg,
+                    shape=shape,
+                    strides=strides,
+                    dtype=dace.typeclass(str(self.func.__annotations__[arg].dtype)),
+                )
+            if (
+                arg in self.stencil_object.parameter_info
+                and self.stencil_object.parameter_info[arg] is None
+            ):
+                self._sdfg.add_symbol(arg, stype=dace.typeclass(self.func.__annotations__[arg]))
+        true_args = [
+            arg
+            for arg in self._sdfg.signature_arglist(with_types=False)
+            if not re.match(f"__.*_._stride", arg) and not re.match(f"__.*_._size", arg)
+        ]
+        assert len(self._sdfg.arg_names) == len(true_args)
+        self._sdfg.save(self.filename)
+        SDFGWrapper.loaded_compiled_sdfgs[self.filename] = self._sdfg
+        print("saved (__sdfg__):", self.filename)
+        self._sdfg.validate()
+        return dace.SDFG.from_json(self._sdfg.to_json())
+
+    def __sdfg_signature__(self):
+        return ([arg for arg in self.func.__annotations__.keys() if arg != "return"], [])
+
+    def __sdfg_closure__(self, *args, **kwargs):
+        return {}
+
+
 class AxisIndex:
     def __init__(self, axis: str, index: int, offset: int = 0):
         self.axis = axis
@@ -373,9 +662,13 @@ class AxisIndex:
     def __str__(self):
         return f"{self.axis}[{self.index}] + {self.offset}"
 
-    def __add__(self, offset: int):
-        if not isinstance(offset, numbers.Integral):
-            raise TypeError("Offset should be an integer type")
+    def __add__(self, offset: Union[int, "AxisIndex"]):
+        if not isinstance(offset, numbers.Integral) and not isinstance(offset, AxisIndex):
+            raise TypeError("Offset should be an integer type or axis index")
+        if isinstance(offset, AxisIndex):
+            if not self.axis == offset.axis:
+                raise ValueError("Only AxisIndex with same axis can be added.")
+            offset = offset.offset
         if offset == 0:
             return self
         else:
@@ -389,6 +682,9 @@ class AxisIndex:
 
     def __rsub__(self, offset: int):
         return self.__radd__(-offset)
+
+    def __neg__(self):
+        return AxisIndex(self.axis, self.index, -self.offset)
 
 
 class AxisInterval:
@@ -469,6 +765,12 @@ PARALLEL = 0
 """Parallel iteration order."""
 
 
+from itertools import count
+
+
+sym_ctr = count()
+
+
 class _FieldDescriptor:
     def __init__(self, dtype, axes, data_dims=tuple()):
         if isinstance(dtype, str):
@@ -490,6 +792,11 @@ class _FieldDescriptor:
                 self.data_dims = tuple(data_dims)
         else:
             self.data_dims = data_dims
+
+    # def __descriptor__(self):
+    #     shape = [dace.symbol(f"__sym_{next(sym_ctr)}_{ax}_size") for ax in self.axes]
+    #     strides = [dace.symbol(f"__sym_{next(sym_ctr)}_{ax}_stride") for ax in self.axes]
+    #     return dace.data.Array(shape=shape, strides=strides, dtype=dace.typeclass(str(self.dtype)))
 
     def __repr__(self):
         args = f"dtype={repr(self.dtype)}, axes={repr(self.axes)}, data_dims={repr(self.data_dims)}"

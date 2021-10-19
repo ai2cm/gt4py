@@ -137,7 +137,7 @@ def make_args_data_from_gtir(pipeline: GtirPipeline) -> ModuleData:
     referenced_field_params = [
         param.name for param in node.params if isinstance(param, gtir.FieldDecl)
     ]
-    for name in sorted(referenced_field_params):
+    for name in referenced_field_params:
         access = AccessKind.NONE
         if name in read_fields:
             access |= AccessKind.READ

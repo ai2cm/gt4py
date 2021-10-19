@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Collection, Dict, Iterator, List, Tuple, 
 import dace
 import dace.data
 import networkx as nx
+import numpy as np
 from dace import SDFG, InterstateEdge
 from pydantic import validator
 
@@ -82,6 +83,22 @@ def array_dimensions(array: dace.data.Array):
         for k in "IJK"
     ]
     return dims
+
+
+def replace_strides(arrays, get_layout_map):
+    symbol_mapping = {}
+    for array in arrays:
+        dims = array_dimensions(array)
+        ndata_dims = len(array.shape) - sum(dims)
+        layout = get_layout_map(dims + [True] * ndata_dims)
+        if array.transient:
+            stride = 1
+            for idx in reversed(np.argsort(layout)):
+                symbol = array.strides[idx]
+                size = array.shape[idx]
+                symbol_mapping[str(symbol)] = stride
+                stride *= size
+    return symbol_mapping
 
 
 def get_tasklet_symbol(name, offset, is_target):
@@ -288,6 +305,37 @@ class CartesianIterationSpace(oir.LocNode):
             ),
             end=oir.AxisBound.from_end(
                 max(
+                    self.j_interval.end.offset,
+                    other.j_interval.end.offset,
+                )
+            ),
+        )
+        return CartesianIterationSpace(i_interval=i_interval, j_interval=j_interval)
+
+    def __and__(self, other: "CartesianIterationSpace") -> "CartesianIterationSpace":
+        i_interval = oir.Interval(
+            start=oir.AxisBound.from_start(
+                max(
+                    self.i_interval.start.offset,
+                    other.i_interval.start.offset,
+                )
+            ),
+            end=oir.AxisBound.from_end(
+                min(
+                    self.i_interval.end.offset,
+                    other.i_interval.end.offset,
+                )
+            ),
+        )
+        j_interval = oir.Interval(
+            start=oir.AxisBound.from_start(
+                max(
+                    self.j_interval.start.offset,
+                    other.j_interval.start.offset,
+                )
+            ),
+            end=oir.AxisBound.from_end(
+                min(
                     self.j_interval.end.offset,
                     other.j_interval.end.offset,
                 )
