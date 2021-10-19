@@ -225,7 +225,7 @@ class BaseModuleGenerator(abc.ABC):
             pre_run=self.generate_pre_run(),
             post_run=self.generate_post_run(),
             implementation=self.generate_implementation(),
-            streams=builder.options.backend_opts.get("streams", None),
+            async_launch=builder.options.backend_opts.get("async_launch", False),
         )
         if self.builder.options.as_dict()["format_source"]:
             module_source = gt_utils.text.format_source(
@@ -482,7 +482,7 @@ class PyExtModuleGenerator(BaseModuleGenerator):
         # pruned.
         if self._has_effect():
             async_code = async_args = ""
-            if self.builder.options.backend_opts.get("streams", False):
+            if self.builder.options.backend_opts.get("async_launch", False):
                 async_code = """
 num_kernels = pyext_module.num_kernels()
 if isinstance(streams, int): streams = [streams] * num_kernels
@@ -507,7 +507,7 @@ class CUDAPyExtModuleGenerator(PyExtModuleGenerator):
         source = super().generate_implementation()
         backend_opts = self.builder.options.backend_opts
         if backend_opts.get("device_sync", True):
-            async_code = "if not streams: " if backend_opts.get("streams", False) else ""
+            async_code = "if not streams: " if backend_opts.get("async_launch", False) else ""
             source += textwrap.dedent(
                 f"""
                     {async_code}cupy.cuda.Device(0).synchronize()

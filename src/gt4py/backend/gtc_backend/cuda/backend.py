@@ -67,17 +67,17 @@ class GTCCudaExtGenerator:
         cuir = dependency_analysis.DependencyAnalysis().visit(cuir)
 
         block_size = self.backend.builder.options.backend_opts.get("block_size", None)
-        streams = self.backend.builder.options.backend_opts.get("streams", None)
+        async_launch = self.backend.builder.options.backend_opts.get("async_launch", False)
         format_source = self.backend.builder.options.format_source
         implementation = cuir_codegen.CUIRCodegen.apply(
-            cuir, block_size=block_size, streams=streams, format_source=format_source
+            cuir, block_size=block_size, async_launch=async_launch, format_source=format_source
         )
 
         bindings = GTCCudaBindingsCodegen.apply(
             cuir,
             module_name=self.module_name,
             backend=self.backend,
-            streams=streams,
+            async_launch=async_launch,
             format_source=format_source,
         )
 
@@ -153,7 +153,7 @@ class GTCCudaBindingsCodegen(codegen.TemplatedGenerator):
 
         extern "C" void run_computation_${name}(
             ${','.join(["std::array<gt::uint_t, 3> domain", *entry_params, 'py::object exec_info'])}
-            % if streams:
+            % if async_launch:
             , std::array<int64_t, NUM_KERNELS> streams
             % endif
             ) {
@@ -167,7 +167,7 @@ class GTCCudaBindingsCodegen(codegen.TemplatedGenerator):
 
                 ${name}(domain)(
                     ${','.join(sid_params)}
-                    % if streams:
+                    % if async_launch:
                     , streams
                     % endif
                 );
@@ -184,7 +184,7 @@ class GTCCudaBindingsCodegen(codegen.TemplatedGenerator):
 
         PYBIND11_MODULE(${module_name}, m) {
             m.def("run_computation", run_computation_${name}, "Runs the given computation");
-        % if streams:
+        % if async_launch:
         m.def("num_kernels", []() {
                 return NUM_KERNELS;
             }, "Get number of CUDA kernels");
@@ -264,8 +264,8 @@ class GTCCudaBackend(BaseGTBackend, CLIBackendMixin):
     options = {
         **BaseGTBackend.GT_BACKEND_OPTS,
         "device_sync": {"versioning": True, "type": bool},
+        "async_launch": {"versioning": True, "type": bool},
         "block_size": {"versioning": True, "type": tuple},
-        "streams": {"versioning": True, "type": list},
     }
     languages = {"computation": "cuda", "bindings": ["python"]}
     storage_info = {

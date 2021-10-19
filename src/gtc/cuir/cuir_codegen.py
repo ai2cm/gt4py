@@ -465,7 +465,7 @@ class CUIRCodegen(codegen.TemplatedGenerator):
         % if is_positional:
         #include <gridtools/stencil/positional.hpp>
         % endif
-        % if streams:
+        % if async_launch:
         constexpr int NUM_KERNELS = ${len(_this_node.kernels)};
         % if _this_node.dependency:
         <%
@@ -578,7 +578,7 @@ class CUIRCodegen(codegen.TemplatedGenerator):
 
             auto ${name}(domain_t domain){
                 return [domain](${','.join(f'auto&& {p}' for p in params)}
-                % if streams and _this_node.kernels:
+                % if async_launch and _this_node.kernels:
                 , std::array<int64_t, NUM_KERNELS> streams
                 % endif
                 ) {
@@ -652,7 +652,7 @@ class CUIRCodegen(codegen.TemplatedGenerator):
                         };
                         <% i_ = loop.index %>
                         % for j_ in range(i_):
-                            % if streams and j_ in dependency_col_ind[dependency_row_ind[i_]:dependency_row_ind[i_+1]]:
+                            % if async_launch and j_ in dependency_col_ind[dependency_row_ind[i_]:dependency_row_ind[i_+1]]:
                         if (streams[${i_}] != streams[${j_}])
                             cudaStreamWaitEvent((cudaStream_t) streams[${i_}], end_event_${j_}, 0); // cudaEventWaitDefault = 0
                             % endif
@@ -669,7 +669,7 @@ class CUIRCodegen(codegen.TemplatedGenerator):
                             %endif
                             kernel_${id(kernel)},
                             0
-                            % if streams:
+                            % if async_launch:
                             , (cudaStream_t) streams[${i_}]
                             , &end_event_${i_}
                             % endif
