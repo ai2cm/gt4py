@@ -170,11 +170,20 @@ class TaskletCodegen(codegen.TemplatedGenerator):
         return "\n".join([mask_str] + body_code)
 
     def visit_HorizontalMask(self, node: oir.HorizontalMask, **kwargs):
+        clauses: List[str] = []
         imin = get_axis_bound_str(node.i.start, "__I")
+        if imin:
+            clauses.append(f"i >= {imin}")
         imax = get_axis_bound_str(node.i.end, "__I")
+        if imax:
+            clauses.append(f"i < {imax}")
         jmin = get_axis_bound_str(node.j.start, "__J")
+        if jmin:
+            clauses.append(f"j >= {jmin}")
         jmax = get_axis_bound_str(node.j.end, "__J")
-        return f"i >= {imin} and i < {imax} and j >= {jmin} and j < {jmax}"
+        if jmax:
+            clauses.append(f"j < {jmax}")
+        return " and ".join(clauses)
 
     class RemoveCastInIndexVisitor(eve.NodeTranslator):
         def visit_FieldAccess(self, node: oir.FieldAccess):

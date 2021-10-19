@@ -117,7 +117,9 @@ def get_tasklet_symbol(name, offset, is_target):
 def get_axis_bound_str(axis_bound, var_name):
     from gtc.common import LevelMarker
 
-    if axis_bound.level == LevelMarker.END:
+    if axis_bound is None:
+        return ""
+    elif axis_bound.level == LevelMarker.END:
         return f"{var_name}{axis_bound.offset:+d}"
     else:
         return f"{axis_bound.offset}"
