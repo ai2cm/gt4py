@@ -481,16 +481,10 @@ class PyExtModuleGenerator(BaseModuleGenerator):
         # stencil has any effect on the API fields, this may not be the case since they could be
         # pruned.
         if self._has_effect():
-            async_code = async_args = ""
-            if self.builder.options.backend_opts.get("async_launch", False):
-                async_code = """
-num_kernels = pyext_module.num_kernels()
-if isinstance(streams, int): streams = [streams] * num_kernels
-                """
-                async_args = ", list(streams)"
-
+            async_launch = self.builder.options.backend_opts.get("async_launch", False)
+            async_args = ", list(streams)" if async_launch else ""
             source = textwrap.dedent(
-                f"""{async_code}
+                f"""
 # Load or generate a GTComputation object for the current domain size
 pyext_module.run_computation({",".join(["list(_domain_)", *args, "exec_info"])}{async_args})
                 """

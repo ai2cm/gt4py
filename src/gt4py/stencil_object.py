@@ -306,6 +306,7 @@ class StencilObject(abc.ABC):
         *,
         validate_args=True,
         exec_info=None,
+        **kwargs,
     ) -> None:
         """Check and preprocess the provided arguments (called by :class:`StencilObject` subclasses).
 
@@ -410,6 +411,7 @@ class StencilObject(abc.ABC):
             exec_info=exec_info,
             **field_args,
             **parameter_args,
+            **kwargs,
         )
 
         if exec_info is not None:

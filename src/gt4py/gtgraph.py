@@ -465,10 +465,10 @@ class AsyncContext:
             if self.concurrent:
                 self.async_schedule(stencil, *args, **kwargs)
             else:
+                kwargs.pop("arg_names", None)
                 num_kernels = stencil.pyext_module.num_kernels()
                 stencil(
                     *args,
-                    async_launch=True,
                     streams=[0] * num_kernels,
                     validate_args=self.validate_args,
                     **kwargs,
