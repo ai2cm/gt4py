@@ -480,7 +480,6 @@ class CUIRCodegen(codegen.TemplatedGenerator):
         constexpr std::array<int, 1> DEPENDENCY_ROW_IND = { -1 };
         constexpr std::array<int, 1> DEPENDENCY_COL_IND = { -1 };
         % endif
-        % endif
 
         using gridtools::int_t;
         using gridtools::uint_t;
@@ -549,6 +548,7 @@ class CUIRCodegen(codegen.TemplatedGenerator):
             GT_CUDA_CHECK(cudaDeviceSynchronize());
 #endif
         }
+        % endif
 
         namespace ${name}_impl_{
             using namespace gridtools;
@@ -657,8 +657,12 @@ class CUIRCodegen(codegen.TemplatedGenerator):
                             cudaStreamWaitEvent((cudaStream_t) streams[${i_}], end_event_${j_}, 0); // cudaEventWaitDefault = 0
                             % endif
                         % endfor
+                        % if async_launch:
                         cudaEvent_t end_event_${i_};
                         launch_kernel<${kernel_extents[index]},
+                        % else:
+                        gpu_backend::launch_kernel<${kernel_extents[index]},
+                        % endif:
                             i_block_size_t::value, j_block_size_t::value>(
                             i_size,
                             j_size,

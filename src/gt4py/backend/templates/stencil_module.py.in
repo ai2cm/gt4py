@@ -71,9 +71,11 @@ class {{ class_name }}(StencilObject):
         the cumulative time spent in all stencil calls, and the actual time spent
         in carrying out the computations.
 
+{%- if async_launch %}
     streams: `Union[List[int], int]`, optional
         Once `sync_launch` enabled, specify CUDA streams to launch
         asynchronously. (`0` by default)
+{%- endif %}
     """
 
 {%- filter indent(width=4) %}
@@ -122,10 +124,12 @@ class {{ class_name }}(StencilObject):
     def options(self) -> dict:
         return type(self)._gt_options_
 
+{%- if async_launch %}
     @property
     def pyext_module(self) -> object:
         return pyext_module
 
+{%- endif %}
     def __call__(
         self, {{ stencil_signature }}, domain=None, origin=None, validate_args=True, exec_info=None{{ ', streams=0' if async_launch else '' }}
     ):
