@@ -480,74 +480,6 @@ class CUIRCodegen(codegen.TemplatedGenerator):
         constexpr std::array<int, 1> DEPENDENCY_ROW_IND = { -1 };
         constexpr std::array<int, 1> DEPENDENCY_COL_IND = { -1 };
         % endif
-
-        using gridtools::int_t;
-        using gridtools::uint_t;
-        using gridtools::stencil::gpu_backend::launch_kernel_impl_::is_empty_ij_extents;
-        using gridtools::stencil::gpu_backend::launch_kernel_impl_::zero_extent_wrapper;
-        using gridtools::stencil::gpu_backend::launch_kernel_impl_::wrapper;
-
-        template <class Extent,
-            int_t BlockSizeI,
-            int_t BlockSizeJ,
-            class Fun,
-            std::enable_if_t<is_empty_ij_extents<Extent>(), int> = 0>
-        void launch_kernel(int_t i_size, int_t j_size, uint_t zblocks,
-                           Fun fun, size_t shared_memory_size = 0,
-                           cudaStream_t stream = 0, cudaEvent_t* end_event = nullptr) {
-
-            static_assert(std::is_trivially_copyable<Fun>::value, GT_INTERNAL_ERROR);
-
-            if (end_event) cudaEventCreateWithFlags(end_event, cudaEventDisableTiming);
-
-            static const size_t num_threads = BlockSizeI * BlockSizeJ;
-
-            uint_t xblocks = (i_size + BlockSizeI - 1) / BlockSizeI;
-            uint_t yblocks = (j_size + BlockSizeJ - 1) / BlockSizeJ;
-
-            dim3 blocks = {xblocks, yblocks, zblocks};
-            dim3 threads = {BlockSizeI, BlockSizeJ, 1};
-#ifndef __HIPCC__
-            GT_CUDA_CHECK(cudaFuncSetAttribute(zero_extent_wrapper<num_threads, BlockSizeI, BlockSizeJ, Fun>, cudaFuncAttributeMaxDynamicSharedMemorySize, shared_memory_size));
-#endif
-            zero_extent_wrapper<num_threads, BlockSizeI, BlockSizeJ, Fun><<<blocks, threads, shared_memory_size, stream>>>(std::move(fun), i_size, j_size);
-            if (end_event) cudaEventRecord(*end_event, stream);
-            GT_CUDA_CHECK(cudaGetLastError());
-#ifndef NDEBUG
-            GT_CUDA_CHECK(cudaDeviceSynchronize());
-#endif
-        }
-
-        template <class Extent,
-            int_t BlockSizeI,
-            int_t BlockSizeJ,
-            class Fun,
-            std::enable_if_t<!is_empty_ij_extents<Extent>(), int> = 0>
-        void launch_kernel(int_t i_size, int_t j_size, uint_t zblocks,
-                           Fun fun, size_t shared_memory_size = 0,
-                           cudaStream_t stream = 0, cudaEvent_t* end_event = nullptr) {
-
-            static_assert(std::is_trivially_copyable<Fun>::value, GT_INTERNAL_ERROR);
-
-            if (end_event) cudaEventCreateWithFlags(end_event, cudaEventDisableTiming);
-
-            static const size_t num_threads = BlockSizeI * BlockSizeJ;
-
-            uint_t xblocks = (i_size + BlockSizeI - 1) / BlockSizeI;
-            uint_t yblocks = (j_size + BlockSizeJ - 1) / BlockSizeJ;
-
-            dim3 blocks = {xblocks, yblocks, zblocks};
-            dim3 threads = {BlockSizeI, BlockSizeJ, 1};
-#ifndef __HIPCC__
-            GT_CUDA_CHECK(cudaFuncSetAttribute(wrapper<num_threads, BlockSizeI, BlockSizeJ, Extent, Fun>, cudaFuncAttributeMaxDynamicSharedMemorySize, shared_memory_size));
-#endif
-            wrapper<num_threads, BlockSizeI, BlockSizeJ, Extent, Fun><<<blocks, threads, shared_memory_size, stream>>>(std::move(fun), i_size, j_size);
-            if (end_event) cudaEventRecord(*end_event, stream);
-            GT_CUDA_CHECK(cudaGetLastError());
-#ifndef NDEBUG
-            GT_CUDA_CHECK(cudaDeviceSynchronize());
-#endif
-        }
         % endif
 
         namespace ${name}_impl_{
@@ -659,10 +591,10 @@ class CUIRCodegen(codegen.TemplatedGenerator):
                         % endfor
                         % if async_launch:
                         cudaEvent_t end_event_${i_};
-                        launch_kernel<${kernel_extents[index]},
-                        % else:
+                        cudaStream_t stream_${i_} = (cudaStream_t) streams[${i_}];
+                        cudaEventCreateWithFlags(&end_event_${i_}, cudaEventDisableTiming);
+                        % endif
                         gpu_backend::launch_kernel<${kernel_extents[index]},
-                        % endif:
                             i_block_size_t::value, j_block_size_t::value>(
                             i_size,
                             j_size,
@@ -674,10 +606,12 @@ class CUIRCodegen(codegen.TemplatedGenerator):
                             kernel_${id(kernel)},
                             0
                             % if async_launch:
-                            , (cudaStream_t) streams[${i_}]
-                            , &end_event_${i_}
+                            , &stream_${i_}
                             % endif
                         );
+                        % if async_launch:
+                        cudaEventRecord(end_event_${i_}, stream_${i_});
+                        % endif
                     % endfor
                 };
             }
