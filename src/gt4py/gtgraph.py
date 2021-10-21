@@ -503,8 +503,9 @@ class AsyncContext:
 
         # resolve dependency
         stencil_id = self.runtime_graph.get_stencil_id()
-        if stencil_id in self.stencil_cache:
-            bind_info, access_info, dep_events, stencil_region = self.stencil_cache[stencil_id]
+        stencil_key = int(stencil._gt_id_, 16)
+        if stencil_key in self.stencil_cache:
+            bind_info, access_info, dep_events, stencil_region = self.stencil_cache[stencil_key]
         else:
             bind_info = {"args": [], "fields": []} if self._graph_record else None
             access_info = self.get_field_access_info(
@@ -520,7 +521,7 @@ class AsyncContext:
                 self.graph_add_stencil(stencil, bind_info, stencil_id)
 
             dep_events = self.get_dependencies(access_info, stencil_id, stencil_region)
-            self.stencil_cache[stencil_id] = (bind_info, access_info, dep_events, stencil_region)
+            self.stencil_cache[stencil_key] = (bind_info, access_info, dep_events, stencil_region)
 
         # dep_events = [stencil.done_event for stencil in self.invoked_stencils if not stencil.done_event.done]
         self.update_last_access_stencil(stencil_id, access_info)
