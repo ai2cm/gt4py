@@ -147,7 +147,9 @@ class AsyncContext:
         self.name: str = name
         if graph_record:
             self.graph_record()
+        self.total_streams: int = 0
         self.logging = logging
+        self.stencil_cache: Dict[int, Any] = {}
 
     def get_node_name(self, node_name: str, stencil_id: int):
         return f"{node_name}_cluster_{stencil_id}"
@@ -208,7 +210,10 @@ class AsyncContext:
             self._graph.render(cleanup=cleanup, format="pdf")
 
     def add_streams(self, num_streams):
+        # try:
         self.stream_pool.extend(cp.cuda.Stream(non_blocking=True) for _ in range(num_streams))
+        # except Exception as ex:
+        #     raise ex
 
     def allocate_streams(self, num_streams):
         streams = []
@@ -498,20 +503,25 @@ class AsyncContext:
 
         # resolve dependency
         stencil_id = self.runtime_graph.get_stencil_id()
-        bind_info = {"args": [], "fields": []} if self._graph_record else None
-        access_info = self.get_field_access_info(
-            stencil_id, stencil, args, kwargs, bind_info=bind_info
-        )
-        stencil_region = None
-        if "origin" in kwargs and "domain" in kwargs and self.region_analysis:
-            stencil_region = self.get_stencil_region(
-                stencil.field_info, kwargs["origin"], kwargs["domain"]
+        if stencil_id in self.stencil_cache:
+            bind_info, access_info, dep_events, stencil_region = self.stencil_cache[stencil_id]
+        else:
+            bind_info = {"args": [], "fields": []} if self._graph_record else None
+            access_info = self.get_field_access_info(
+                stencil_id, stencil, args, kwargs, bind_info=bind_info
             )
+            stencil_region = None
+            if "origin" in kwargs and "domain" in kwargs and self.region_analysis:
+                stencil_region = self.get_stencil_region(
+                    stencil.field_info, kwargs["origin"], kwargs["domain"]
+                )
 
-        if self._graph_record:
-            self.graph_add_stencil(stencil, bind_info, stencil_id)
+            if self._graph_record:
+                self.graph_add_stencil(stencil, bind_info, stencil_id)
 
-        dep_events = self.get_dependencies(access_info, stencil_id, stencil_region)
+            dep_events = self.get_dependencies(access_info, stencil_id, stencil_region)
+            self.stencil_cache[stencil_id] = (bind_info, access_info, dep_events, stencil_region)
+
         # dep_events = [stencil.done_event for stencil in self.invoked_stencils if not stencil.done_event.done]
         self.update_last_access_stencil(stencil_id, access_info)
 
@@ -537,8 +547,9 @@ class AsyncContext:
 
             stencil_name = stencil._file_name.split("/")[-1].replace(".py", "")
             if self.logging:
+                self.total_streams += len(stream_ptrs)
                 with open("./streams.log", "a") as log:
-                    log.write(f"launch stencil '{stencil_name}' with streams {stream_ptrs}({len(stream_ptrs)})\n")
+                    log.write(f"launch stencil '{stencil_name}' with streams {stream_ptrs}({len(stream_ptrs)}/{self.total_streams})\n")
             stencil.run(streams=stream_ptrs, **args_as_kwargs, **kwargs)
         else:
             stencil(
