@@ -119,6 +119,7 @@ class AsyncContext:
         profiling=False,
         region_analysis=False,
         validate_args=False,
+        logging=True,
     ):
         self.stream_pool: List[Optional[cp.cuda.Stream]] = []
         self.runtime_graph: RuntimeGraph = RuntimeGraph()
@@ -146,6 +147,7 @@ class AsyncContext:
         self.name: str = name
         if graph_record:
             self.graph_record()
+        self.logging = logging
 
     def get_node_name(self, node_name: str, stencil_id: int):
         return f"{node_name}_cluster_{stencil_id}"
@@ -231,9 +233,6 @@ class AsyncContext:
                 self.invoked_stencils.append(stencil)
             else:
                 self.stat.finished_stencils += 1
-
-    def set_field_name(self, field: Storage, field_name: str):
-        field._field_name = field_name
 
     def get_field_name(self, field: Storage):
         if not hasattr(field, "_field_name"):
@@ -528,9 +527,6 @@ class AsyncContext:
                 stream.wait_event(dep_event)
 
         # Launch stencil
-        # streams = stream_pool
-        # if num_streams == 1:
-        #     streams = streams * num_kernels
         stream_ptrs = [stream.ptr for stream in stream_pool]
 
         arg_names = kwargs.pop("arg_names", [])
@@ -539,6 +535,10 @@ class AsyncContext:
             kwargs["_origin_"] = kwargs.pop("origin")
             kwargs["_domain_"] = kwargs.pop("domain")
 
+            stencil_name = stencil._file_name.split("/")[-1].replace(".py", "")
+            if self.logging:
+                with open("./streams.log", "a") as log:
+                    log.write(f"launch stencil '{stencil_name}' with streams {stream_ptrs}({len(stream_ptrs)})\n")
             stencil.run(streams=stream_ptrs, **args_as_kwargs, **kwargs)
         else:
             stencil(
