@@ -185,6 +185,22 @@ class TaskletCodegen(codegen.TemplatedGenerator):
             clauses.append(f"j < {jmax}")
         return " and ".join(clauses)
 
+    def visit_For(self, node: oir.For, **kwargs):
+        """Generate a plain-python for loop that will be translated to cpp/cuda.
+
+        This is a low-tech version. A better solution would be to actually express
+        the for loop in SDFGs so we can have it part of the optimisation in a more
+        significant way.
+        """
+        start = self.visit(node.start, **kwargs)
+        end = self.visit(node.end, **kwargs)
+        cond = f"for {node.target_name} in range({start},{end}):"
+        indent = "    "
+        body = self.visit(node.body, **kwargs)
+        body = [indent + b for b in body]
+        code_as_str = "\n".join([cond] + body)
+        return code_as_str
+
     class RemoveCastInIndexVisitor(eve.NodeTranslator):
         def visit_FieldAccess(self, node: oir.FieldAccess):
             if node.data_index:
@@ -204,9 +220,31 @@ class TaskletCodegen(codegen.TemplatedGenerator):
             else:
                 return oir.Cast(dtype=node.dtype, expr=node)
 
+    class RemoveForLoopIteratorScalar(eve.NodeTranslator):
+        """Dace transpiling from py to cpp/cuda uses `auto`
+        as the type for the iterator IF it hasn't been defined before in cpp/cuda.
+        Since the sequential For loop of GT4Py are suppose to _not_ reuse
+        the iterator anywhere we strip it's definition from the LocalScalar of
+        HorizontalExecution.
+        """
+
+        def visit_HorizontalExecution(
+            self, node: oir.HorizontalExecution
+        ) -> oir.HorizontalExecution:
+            for stmt in node.body:
+                if isinstance(stmt, oir.For):
+                    for_iterator = [x for x in node.declarations if x.name == stmt.target_name]
+                    if len(for_iterator) == 1:
+                        node.declarations.remove(for_iterator[0])
+                        break
+                    if len(for_iterator) > 1:
+                        raise RuntimeError("Ambiguous iterator name for For loop")
+            return node
+
     @classmethod
     def apply(cls, node: oir.HorizontalExecution, **kwargs: Any) -> str:
         preprocessed_node = cls.RemoveCastInIndexVisitor().visit(node)
+        preprocessed_node = cls.RemoveForLoopIteratorScalar().visit(preprocessed_node)
         if not isinstance(node, oir.HorizontalExecution):
             raise ValueError("apply() requires oir.HorizontalExecution node")
         generated_code = super().apply(preprocessed_node)
