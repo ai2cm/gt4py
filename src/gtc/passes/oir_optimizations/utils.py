@@ -136,17 +136,17 @@ class AccessCollector(NodeVisitor):
 
     class GeneralAccessCollection(GenericAccessCollection[GeneralAccess, GeneralOffsetTuple]):
         def cartesian_accesses(self) -> "AccessCollector.CartesianAccessCollection":
-            return AccessCollector.CartesianAccessCollection(
-                [
+            accesses: List[CartesianAccess] = []
+            for acc in self._ordered_accesses:
+                offset = (acc.offset[0], acc.offset[1], 0) if acc.offset[2] is None else acc.offset
+                accesses.append(
                     CartesianAccess(
                         field=acc.field,
-                        offset=cast(Tuple[int, int, int], acc.offset),
+                        offset=offset,
                         is_write=acc.is_write,
                     )
-                    for acc in self._ordered_accesses
-                    if acc.offset[2] is not None
-                ]
-            )
+                )
+            return AccessCollector.CartesianAccessCollection(accesses)
 
         def has_variable_access(self) -> bool:
             return any(acc.offset[2] is None for acc in self._ordered_accesses)

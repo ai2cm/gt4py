@@ -15,7 +15,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import dace
 import dace.properties
@@ -65,7 +65,7 @@ class BaseOirSDFGBuilder(ABC):
         self._recent_read_acc: Dict[str, dace.nodes.AccessNode] = dict()
 
         self._access_nodes: Dict[str, dace.nodes.AccessNode] = dict()
-        self._access_collection_cache: Dict[int, AccessCollector.CartesianAccessCollection] = dict()
+        self._access_collection_cache: Dict[int, AccessCollector.GeneralAccessCollection] = dict()
         self._source_nodes: Dict[str, dace.nodes.AccessNode] = dict()
         self._delete_candidates: List[MultiConnectorEdge] = list()
 
@@ -115,9 +115,9 @@ class BaseOirSDFGBuilder(ABC):
 
     def _get_access_collection(
         self, node: "Union[HorizontalExecutionLibraryNode, VerticalLoopLibraryNode, SDFG]"
-    ) -> AccessCollector.CartesianAccessCollection:
+    ) -> AccessCollector.GeneralAccessCollection:
         if isinstance(node, SDFG):
-            res = AccessCollector.CartesianAccessCollection([])
+            res = AccessCollector.GeneralAccessCollection([])
             for node in node.states()[0].nodes():
                 if isinstance(node, (HorizontalExecutionLibraryNode, VerticalLoopLibraryNode)):
                     collection = self._get_access_collection(node)
@@ -131,7 +131,7 @@ class BaseOirSDFGBuilder(ABC):
             return self._access_collection_cache[id(node.oir_node)]
         else:
             assert isinstance(node, VerticalLoopLibraryNode)
-            res = AccessCollector.CartesianAccessCollection([])
+            res = AccessCollector.GeneralAccessCollection([])
             for _, sdfg in node.sections:
                 collection = self._get_access_collection(sdfg)
                 res._ordered_accesses.extend(collection._ordered_accesses)
@@ -169,7 +169,7 @@ class BaseOirSDFGBuilder(ABC):
         self._recent_write_acc = dict()
 
     def _add_read_edges(
-        self, node, collections: List[Tuple[Interval, AccessCollector.CartesianAccessCollection]]
+        self, node, collections: List[Tuple[Interval, AccessCollector.GeneralAccessCollection]]
     ):
         read_accesses: Dict[str, dace.nodes.AccessNode] = dict()
         for interval, access_collection in collections:
@@ -197,7 +197,7 @@ class BaseOirSDFGBuilder(ABC):
             self._state.add_edge(recent_access, None, node, "IN_" + name, dace.Memlet())
 
     def _add_write_edges(
-        self, node, collections: List[Tuple[Interval, AccessCollector.CartesianAccessCollection]]
+        self, node, collections: List[Tuple[Interval, AccessCollector.GeneralAccessCollection]]
     ):
         write_accesses = dict()
         for interval, access_collection in collections:
@@ -221,7 +221,7 @@ class BaseOirSDFGBuilder(ABC):
             self._state.add_edge(node, "OUT_" + name, access_node, None, dace.Memlet())
 
     def _add_write_after_write_edges(
-        self, node, collections: List[Tuple[Interval, AccessCollector.CartesianAccessCollection]]
+        self, node, collections: List[Tuple[Interval, AccessCollector.GeneralAccessCollection]]
     ):
         for interval, collection in collections:
             for name in collection.write_fields():
@@ -230,7 +230,7 @@ class BaseOirSDFGBuilder(ABC):
                     self._delete_candidates.append(edge)
 
     def _add_write_after_read_edges(
-        self, node, collections: List[Tuple[Interval, AccessCollector.CartesianAccessCollection]]
+        self, node, collections: List[Tuple[Interval, AccessCollector.GeneralAccessCollection]]
     ):
         for interval, collection in collections:
             for name in collection.read_fields():
@@ -495,21 +495,21 @@ class StencilOirSDFGBuilder(BaseOirSDFGBuilder):
 
         axis_idx = sum(self._axes[name][:2])
 
-        subset = None
+        subset: Optional[dace.subsets.Range] = None
         for edge in self._state.edges():
             if edge.data.data is not None and edge.data.data == name:
                 if subset is None:
                     subset = edge.data.subset
                 subset = dace.subsets.union(subset, edge.data.subset)
-        subset: dace.subsets.Range
-        k_size = subset.bounding_box_size()[axis_idx]
 
         k_sym = dace.symbol("__K")
-        k_size_symbolic = dace.symbolic.pystr_to_symbolic(k_size)
-        if k_sym in k_size_symbolic.free_symbols and bool(k_size_symbolic >= k_sym):
-            return k_size
-        else:
-            return "__K"
+        if subset is not None:
+            k_size = subset.bounding_box_size()[axis_idx]
+            k_size_symbolic = dace.symbolic.pystr_to_symbolic(k_size)
+            if k_sym in k_size_symbolic.free_symbols and bool(k_size_symbolic >= k_sym):
+                return k_size
+
+        return k_sym.name
 
     def get_k_subsets(self, node):
         assert isinstance(node, VerticalLoopLibraryNode)

@@ -107,7 +107,7 @@ def get_tasklet_symbol(name, offset, is_target):
 
     acc_name = name + "__"
     suffix = "_".join(
-        var + ("m" if o < 0 else "p") + f"{abs(o):d}" for var, o in zip("ijk", offset) if o != 0
+        var + ("m" if o < 0 else "p") + f"{abs(o):d}" for var, o in zip("ijk", offset) if o
     )
     if suffix != "":
         acc_name += suffix
@@ -465,7 +465,7 @@ def get_access_collection(
     from gtc.dace.nodes import HorizontalExecutionLibraryNode, VerticalLoopLibraryNode
 
     if isinstance(node, dace.SDFG):
-        res = AccessCollector.CartesianAccessCollection([])
+        res = AccessCollector.GeneralAccessCollection([])
         for node in node.states()[0].nodes():
             if isinstance(node, (HorizontalExecutionLibraryNode, VerticalLoopLibraryNode)):
                 collection = get_access_collection(node)
@@ -475,7 +475,7 @@ def get_access_collection(
         return AccessCollector.apply(node.oir_node)
     else:
         assert isinstance(node, VerticalLoopLibraryNode)
-        res = AccessCollector.CartesianAccessCollection([])
+        res = AccessCollector.GeneralAccessCollection([])
         for _, sdfg in node.sections:
             collection = get_access_collection(sdfg)
             res._ordered_accesses.extend(collection._ordered_accesses)
