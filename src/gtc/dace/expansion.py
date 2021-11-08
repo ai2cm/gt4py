@@ -46,19 +46,25 @@ class TaskletCodegen(codegen.TemplatedGenerator):
     ScalarAccess = as_fmt("{name}")
 
     def visit_FieldAccess(self, node: oir.FieldAccess, *, is_target, targets):
-
-        if (is_target or node.name in targets) and self.visit(node.offset) == "":
-            targets.add(node.name)
-            name = "__" + node.name
+        name = node.name
+        offset_str = self.visit(node.offset, is_target=is_target, targets=targets)
+        # Treat variable offsets like assignments (targets)
+        if isinstance(node.offset, common.VariableKOffset):
+            targets.add(name)
+            name = f"{name}__"
         else:
-            name = node.name + "__" + self.visit(node.offset)
-        if node.data_index:
-            offset_str = "[" + ",".join(self.visit(node.data_index)) + "]"
-        else:
-            offset_str = ""
-        return name + offset_str
+            if (is_target or name in targets) and offset_str == "":
+                targets.add(name)
+                name = f"__{name}"
+            else:
+                name = f"{name}__{offset_str}"
+            if node.data_index:
+                offset_str = f"[{','.join(self.visit(node.data_index))}]"
+            else:
+                offset_str = ""
+        return f"{name}{offset_str}"
 
-    def visit_CartesianOffset(self, node: common.CartesianOffset):
+    def visit_CartesianOffset(self, node: common.CartesianOffset, **kwargs: Any):
         res = []
         if node.i != 0:
             res.append(f'i{"m" if node.i<0 else "p"}{abs(node.i):d}')
@@ -67,6 +73,14 @@ class TaskletCodegen(codegen.TemplatedGenerator):
         if node.k != 0:
             res.append(f'k{"m" if node.k<0 else "p"}{abs(node.k):d}')
         return "_".join(res)
+
+    def visit_VariableKOffset(self, node: common.VariableKOffset, **kwargs: Any):
+        k_offset = ""
+        if node.k:
+            k_offset = self.visit(node.k, **kwargs)
+            if k_offset[0] != "(":
+                k_offset = f"({k_offset})"
+        return k_offset
 
     def visit_AssignStmt(self, node: oir.AssignStmt, **kwargs):
         right = self.visit(node.right, is_target=False, **kwargs)
@@ -200,6 +214,23 @@ class TaskletCodegen(codegen.TemplatedGenerator):
         body = [indent + b for b in body]
         code_as_str = "\n".join([cond] + body)
         return code_as_str
+
+    def visit_While(self, node: oir.While, **kwargs):
+        # TODO(eddied): Make this an OIR pass to benefit other backends...
+        body_nodes = []
+        for child in node.body:
+            if isinstance(child, oir.MaskStmt) and node.cond == child.mask:
+                body_nodes.extend(child.body)
+            else:
+                body_nodes.append(child)
+
+        body = self.visit(body_nodes, **kwargs)
+        cond = self.visit(node.cond, is_target=False, **kwargs)
+        indent = " " * 4
+        delim = f"\n{indent}"
+        code = f"while {cond}:\n{indent}{delim.join(body)}"
+        return code
+
 
     class RemoveCastInIndexVisitor(eve.NodeTranslator):
         def visit_FieldAccess(self, node: oir.FieldAccess):
@@ -396,9 +427,8 @@ class NaiveVerticalLoopExpander(OIRLibraryNodeExpander):
             access_collection = get_access_collection(section)
             for name, offsets in access_collection.offsets().items():
                 for off in offsets:
-                    k_level = oir.AxisBound(
-                        level=interval.start.level, offset=interval.start.offset + off[2]
-                    )
+                    k_offset = interval.start.offset + (off[2] if off[2] else 0)
+                    k_level = oir.AxisBound(level=interval.start.level, offset=k_offset)
                     k_orig = min(k_origs.get(name, k_level), k_level)
                     k_origs[name] = k_orig
         return k_origs
@@ -428,15 +458,16 @@ class NaiveVerticalLoopExpander(OIRLibraryNodeExpander):
                         -off[0] - he.iteration_space.i_interval.start.offset,
                         -off[1] - he.iteration_space.j_interval.start.offset,
                     )
+                    k_offset = off[2] if off[2] else 0
                     if name not in section_origins:
                         section_origins[name] = origin
                     if name not in min_k_offsets:
-                        min_k_offsets[name] = off[2]
+                        min_k_offsets[name] = k_offset
                     section_origins[name] = (
                         max(section_origins[name][0], origin[0]),
                         max(section_origins[name][1], origin[1]),
                     )
-                    min_k_offsets[name] = min(min_k_offsets[name], off[2])
+                    min_k_offsets[name] = min(min_k_offsets[name], k_offset)
         access_collection = get_access_collection(section)
         for name, section_origin in section_origins.items():
             vl_origin = self.origins[name]
@@ -606,7 +637,7 @@ class NaiveHorizontalExecutionExpander(OIRLibraryNodeExpander):
                 origins[name] = (
                     min(origins[name][0], off[0]),
                     min(origins[name][1], off[1]),
-                    min(origins[name][2], off[2]),
+                    min(origins[name][2] if origins[name][2] else 0, off[2]if off[2] else 0),
                 )
             origins[name] = (
                 -origins[name][0] - self.node.iteration_space.i_interval.start.offset,
@@ -628,7 +659,7 @@ class NaiveHorizontalExecutionExpander(OIRLibraryNodeExpander):
 
             for off in offsets:
                 subset_strs = [
-                    f"{var}{self.origins[name][dim] + off[dim]:+d}"
+                    f"{var}{self.origins[name][dim] + (off[dim] if off[dim] else 0):+d}"
                     for dim, var in enumerate("ij0")
                     if dimensions[dim]
                 ]
@@ -667,6 +698,7 @@ class NaiveHorizontalExecutionExpander(OIRLibraryNodeExpander):
         outputs = [name[len("OUT_") :] for name in self.node.out_connectors]
         input_nodes = {name: self.res_state.add_read(name) for name in inputs}
         output_nodes = {name: self.res_state.add_write(name) for name in outputs}
+        code: str = TaskletCodegen.apply(self.node.oir_node)
 
         self.res_state.add_mapped_tasklet(
             self.node.name + "_tasklet",
@@ -675,7 +707,7 @@ class NaiveHorizontalExecutionExpander(OIRLibraryNodeExpander):
             outputs=out_memlets,
             input_nodes=input_nodes,
             output_nodes=output_nodes,
-            code=TaskletCodegen.apply(self.node.oir_node),
+            code=code,
             external_edges=True,
             schedule=self.node.map_schedule,
         )

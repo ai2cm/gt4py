@@ -262,7 +262,8 @@ class KOriginsVisitor(NodeVisitor):
         self, node: gtir.FieldAccess, *, k_origins, interval: gtir.Interval
     ) -> None:
         if interval.start.level == LevelMarker.START:
-            candidate = max(0, -interval.start.offset - node.offset.k)
+            k_offset = node.offset.k if isinstance(node.offset.k, int) else 0
+            candidate = max(0, -interval.start.offset - k_offset)
         else:
             candidate = 0
         k_origins[node.name] = max(k_origins.get(node.name, 0), candidate)
