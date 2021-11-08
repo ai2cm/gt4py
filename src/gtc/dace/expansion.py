@@ -48,11 +48,7 @@ class TaskletCodegen(codegen.TemplatedGenerator):
     def visit_FieldAccess(self, node: oir.FieldAccess, *, is_target, targets):
         name = node.name
         offset_str = self.visit(node.offset, is_target=is_target, targets=targets)
-        # Treat variable offsets like assignments (targets)
-        if isinstance(node.offset, common.VariableKOffset):
-            targets.add(name)
-            name = f"{name}__"
-        else:
+        if isinstance(node.offset, common.CartesianOffset):
             if (is_target or name in targets) and offset_str == "":
                 targets.add(name)
                 name = f"__{name}"
@@ -74,12 +70,13 @@ class TaskletCodegen(codegen.TemplatedGenerator):
             res.append(f'k{"m" if node.k<0 else "p"}{abs(node.k):d}')
         return "_".join(res)
 
-    def visit_VariableKOffset(self, node: common.VariableKOffset, **kwargs: Any):
+    def visit_VariableKOffset(self, node: common.VariableKOffset, targets, **kwargs: Any):
         k_offset = ""
         if node.k:
-            k_offset = self.visit(node.k, **kwargs)
-            if k_offset[0] != "(":
-                k_offset = f"({k_offset})"
+            k_offset = f"[{self.visit(node.k, targets=targets, **kwargs)}]"
+            # Treat variable offsets like assignments (targets)
+            if hasattr(node.k, "name"):
+                targets.add(node.k.name)
         return k_offset
 
     def visit_AssignStmt(self, node: oir.AssignStmt, **kwargs):
