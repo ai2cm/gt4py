@@ -474,7 +474,7 @@ class SDFGWrapper:
                 definition=self.func, backend="gtc:numpy", **self.stencil_kwargs
             )
 
-            basename = os.path.splitext(self.stencil_object.file_name)[0]
+            basename = os.path.splitext(self.stencil_object._file_name)[0]
             self.filename = (
                 basename + "_wrapper_" + str(shash(self.device, self.origin, self.domain)) + ".sdfg"
             )
