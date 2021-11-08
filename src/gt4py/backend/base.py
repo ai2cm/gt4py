@@ -281,6 +281,7 @@ class BaseBackend(Backend):
 
         return stencil_class
 
+    @property
     def file_name(self) -> str:
         return str(self.builder.module_path)
 
