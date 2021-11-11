@@ -48,16 +48,16 @@ class TaskletCodegen(codegen.TemplatedGenerator):
     def visit_FieldAccess(self, node: oir.FieldAccess, *, is_target, targets):
         name = node.name
         offset_str = self.visit(node.offset, is_target=is_target, targets=targets)
-        if isinstance(node.offset, common.CartesianOffset):
-            if (is_target or name in targets) and offset_str == "":
-                targets.add(name)
-                name = f"__{name}"
-            else:
-                name = f"{name}__{offset_str}"
-            if node.data_index:
-                offset_str = f"[{','.join(self.visit(node.data_index))}]"
-            else:
-                offset_str = ""
+        # if isinstance(node.offset, common.CartesianOffset):
+        if (is_target or name in targets) and offset_str == "":
+            targets.add(name)
+            name = f"__{name}"
+        else:
+            name = f"{name}__{offset_str}"
+        if node.data_index:
+            offset_str = f"[{','.join(self.visit(node.data_index))}]"
+        else:
+            offset_str = ""
         return f"{name}{offset_str}"
 
     def visit_CartesianOffset(self, node: common.CartesianOffset, **kwargs: Any):
@@ -73,7 +73,7 @@ class TaskletCodegen(codegen.TemplatedGenerator):
     def visit_VariableKOffset(self, node: common.VariableKOffset, targets, **kwargs: Any):
         k_offset = ""
         if node.k:
-            k_offset = f"[{self.visit(node.k, targets=targets, **kwargs)}]"
+            k_offset = f"kp({self.visit(node.k, targets=targets, **kwargs)})"
             # Treat variable offsets like assignments (targets)
             if hasattr(node.k, "name"):
                 targets.add(node.k.name)
@@ -223,11 +223,17 @@ class TaskletCodegen(codegen.TemplatedGenerator):
 
         body = self.visit(body_nodes, **kwargs)
         cond = self.visit(node.cond, is_target=False, **kwargs)
+
+        init = "num_iter = 0"
+        max_iter = 1000
+        cond += f" and (num_iter < {max_iter})"
+        body.append("num_iter += 1")
+
         indent = " " * 4
         delim = f"\n{indent}"
-        code = f"while {cond}:\n{indent}{delim.join(body)}"
-        return code
+        code = f"{init}\nwhile {cond}:\n{indent}{delim.join(body)}"
 
+        return code
 
     class RemoveCastInIndexVisitor(eve.NodeTranslator):
         def visit_FieldAccess(self, node: oir.FieldAccess):
@@ -634,7 +640,7 @@ class NaiveHorizontalExecutionExpander(OIRLibraryNodeExpander):
                 origins[name] = (
                     min(origins[name][0], off[0]),
                     min(origins[name][1], off[1]),
-                    min(origins[name][2] if origins[name][2] else 0, off[2]if off[2] else 0),
+                    min(origins[name][2] if origins[name][2] else 0, off[2] if off[2] else 0),
                 )
             origins[name] = (
                 -origins[name][0] - self.node.iteration_space.i_interval.start.offset,

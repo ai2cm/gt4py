@@ -820,7 +820,9 @@ class BaseGTBackend(gt_backend.BasePyExtBackend, gt_backend.CLIBackendMixin):
                 clean=self.builder.options.backend_opts.get("clean", False),
                 **pyext_builder.get_gt_pyext_build_opts(
                     debug_mode=self.builder.options.backend_opts.get("debug_mode", False),
-                    add_profile_info=self.builder.options.backend_opts.get("add_profile_info", False),
+                    add_profile_info=self.builder.options.backend_opts.get(
+                        "add_profile_info", False
+                    ),
                     uses_cuda=uses_cuda,
                     gt_version=gt_version,
                 ),

@@ -28,8 +28,8 @@ from .gtir_utils import (
     FieldAccessFactory,
     FieldIfStmtFactory,
     ScalarIfStmtFactory,
-    WhileFactory,
     VariableKOffsetFactory,
+    WhileFactory,
 )
 
 
