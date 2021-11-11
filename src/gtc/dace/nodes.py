@@ -14,6 +14,8 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import base64
+import pickle
 from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple
 
@@ -32,8 +34,7 @@ from gtc.dace.utils import (
     get_node_name_mapping,
 )
 from gtc.oir import CacheDesc, HorizontalExecution, Interval, VerticalLoop, VerticalLoopSection
-import pickle
-import base64
+
 
 class OIRLibraryNode(ABC, dace.nodes.LibraryNode):
     @abstractmethod
@@ -49,19 +50,21 @@ class OIRLibraryNode(ABC, dace.nodes.LibraryNode):
         pbytes = pickle.dumps(self, protocol=protocol)
 
         jsonobj = super().to_json(parent)
-        jsonobj['classpath'] = dace.nodes.full_class_path(self)
-        jsonobj['attributes']['protocol'] = protocol
-        jsonobj['attributes']['pickle'] = base64.b64encode(pbytes).decode("utf-8")
+        jsonobj["classpath"] = dace.nodes.full_class_path(self)
+        jsonobj["attributes"]["protocol"] = protocol
+        jsonobj["attributes"]["pickle"] = base64.b64encode(pbytes).decode("utf-8")
 
         return jsonobj
+
     @classmethod
     def from_json(cls, json_obj, context=None):
-        if 'attributes' not in json_obj:
-            b64string = json_obj['pickle']
+        if "attributes" not in json_obj:
+            b64string = json_obj["pickle"]
         else:
-            b64string = json_obj['attributes']['pickle']
+            b64string = json_obj["attributes"]["pickle"]
         bytes = base64.b64decode(b64string)
         return pickle.loads(bytes)
+
 
 @library.node
 class VerticalLoopLibraryNode(OIRLibraryNode):

@@ -235,7 +235,6 @@ class TaskletCodegen(codegen.TemplatedGenerator):
 
         return code
 
-
     class RemoveCastInIndexVisitor(eve.NodeTranslator):
         def visit_FieldAccess(self, node: oir.FieldAccess):
             if node.data_index:
@@ -641,7 +640,7 @@ class NaiveHorizontalExecutionExpander(OIRLibraryNodeExpander):
                 origins[name] = (
                     min(origins[name][0], off[0]),
                     min(origins[name][1], off[1]),
-                    min(origins[name][2] if origins[name][2] else 0, off[2]if off[2] else 0),
+                    min(origins[name][2] if origins[name][2] else 0, off[2] if off[2] else 0),
                 )
             origins[name] = (
                 -origins[name][0] - self.node.iteration_space.i_interval.start.offset,

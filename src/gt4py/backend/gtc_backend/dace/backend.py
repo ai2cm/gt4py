@@ -257,30 +257,30 @@ class GTCDaCeExtGenerator:
         while start >= 0:
             # Get field name
             begin = implementation.rfind(" ", last_start, start)
-            field = implementation[begin + 1:start]
+            field = implementation[begin + 1 : start]
             while field.startswith("(") and len(field) > 0:
                 field = field[1:]
                 begin += 1
 
             # Extract offset expression
             stop = implementation.find(")", start + 1)
-            expr = implementation[begin + 1:stop + 1]
+            expr = implementation[begin + 1 : stop + 1]
 
             # Dereferencing, e.g., (*__lev)
             if "*" in expr:
                 stop += 1
-                is_binop = implementation[stop] == ' '
+                is_binop = implementation[stop] == " "
                 if is_binop:
                     end = implementation.find(")", stop + 1)
-                    expr = implementation[begin + 1:end + 3]
+                    expr = implementation[begin + 1 : end + 3]
                 else:
-                    expr = implementation[begin + 1:stop + 1]
+                    expr = implementation[begin + 1 : stop + 1]
 
             # Extract offset from expression
             lhs = f"{field}__kp("
             begin = expr.find(lhs)
             end = expr.rfind(")")
-            offset = expr[begin + len(lhs):end]
+            offset = expr[begin + len(lhs) : end]
 
             # Build new expression and replace in implementation
             new_expr = f"{field}[(((__{field}_I_stride * i) + (__{field}_J_stride * j)) + (__{field}_K_stride * (k + {offset})))]"

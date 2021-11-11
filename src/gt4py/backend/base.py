@@ -413,6 +413,10 @@ class BasePyExtBackend(BaseBackend):
             if src_ext not in [".h", ".hpp"]:
                 sources.append(str(src_file_path))
 
+            if os.path.exists(str(src_file_path) + "~"):
+                with open(str(src_file_path) + "~") as file:
+                    source = file.read()
+
             if source is not gt_utils.NOTHING:
                 src_file_path.write_text(source)
 
