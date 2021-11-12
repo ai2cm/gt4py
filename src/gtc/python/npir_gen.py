@@ -17,12 +17,13 @@
 import functools
 import textwrap
 from dataclasses import dataclass, field
-from typing import Any, Collection, Dict, Optional, Tuple, Union
+from typing import Any, Collection, Dict, Optional, Tuple, Union, cast
 
 from eve.codegen import FormatTemplate, JinjaTemplate, TemplatedGenerator
 from eve.visitors import NodeVisitor
 from gt4py.definitions import Extent
 from gtc import common
+from gtc.passes import utils
 from gtc.python import npir
 
 
@@ -143,57 +144,6 @@ def compute_axis_bounds(
     return lower, upper
 
 
-def slice_to_extent(acc: npir.FieldSlice) -> Extent:
-    return Extent(
-        (
-            [acc.i_offset.offset.value] * 2 if acc.i_offset else (0, 0),
-            [acc.j_offset.offset.value] * 2 if acc.j_offset else (0, 0),
-            [acc.k_offset.offset.value] * 2 if acc.k_offset else (0, 0),
-        )
-    )
-
-
-HorizontalExtent = Tuple[Tuple[int, int], Tuple[int, int]]
-
-
-class ExtentCalculator(NodeVisitor):
-    @dataclass
-    class Context:
-        field_extents: Dict[str, Extent] = field(default_factory=dict)
-        block_extents: Dict[int, HorizontalExtent] = field(default_factory=dict)
-
-    def visit_Computation(self, node: npir.Computation):
-        ctx = self.Context()
-        for vertical_pass in reversed(node.vertical_passes):
-            self.visit(vertical_pass, ctx=ctx)
-        return ctx.field_extents, ctx.block_extents
-
-    def visit_VerticalPass(self, node: npir.VerticalPass, *, ctx: Context):
-        for block in reversed(node.body):
-            self.visit(block, ctx=ctx)
-
-    def visit_HorizontalBlock(self, node: npir.HorizontalBlock, *, ctx: Context):
-        writes = (
-            node.iter_tree()
-            .if_isinstance(npir.VectorAssign)
-            .getattr("left")
-            .if_isinstance(npir.FieldSlice)
-            .getattr("name")
-            .to_set()
-        )
-        extent = functools.reduce(
-            lambda ext, name: ext | ctx.field_extents.get(name, Extent.zeros()),
-            writes,
-            Extent.zeros(),
-        )
-        ctx.block_extents[id(node)] = extent
-
-        for acc in node.iter_tree().if_isinstance(npir.FieldSlice).to_list():
-            ctx.field_extents[acc.name] = ctx.field_extents.get(acc.name, Extent.zeros()).union(
-                extent + slice_to_extent(acc)
-            )
-
-
 VARIABLE_OFFSET_FUNCTION = textwrap.dedent(
     """
     def var_k_expr(expr, k):
@@ -283,9 +233,6 @@ class NpirGen(TemplatedGenerator):
 
     NumericalOffset = FormatTemplate("{op}{delta}")
 
-    def visit_VariableKOffset(self, node: npir.VariableKOffset, **kwargs: Any) -> str:
-        return self.visit(node.value, **kwargs)
-
     def visit_AxisOffset(
         self,
         node: npir.AxisOffset,
@@ -345,8 +292,6 @@ class NpirGen(TemplatedGenerator):
     ) -> Union[str, Collection[str]]:
 
         offset = [node.i_offset, node.j_offset, node.k_offset]
-        domain = list(horiz_rest) + [None] if horiz_rest else [None] * 3
-
         offset_str = ", ".join(
             self.visit(off, is_serial=is_serial, **kwargs) if off else ":" for off in offset
         )

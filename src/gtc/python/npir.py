@@ -44,8 +44,8 @@ class NumericalOffset(eve.Node):
     value: int
 
 
-class VariableKOffset(eve.Node):
-    value: Expr
+class VariableKOffset(common.VariableKOffset[Expr]):
+    pass
 
 
 class AxisName(eve.StrEnum):
@@ -82,10 +82,6 @@ class AxisOffset(eve.Node):
             if isinstance(offset, int)
             else cls.from_expr(axis_name=AxisName.K, offset=offset, parallel=parallel)
         )
-
-
-class VariableKOffset(common.VariableKOffset[Expr]):
-    pass
 
 
 @eve.utils.noninstantiable

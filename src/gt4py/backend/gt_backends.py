@@ -724,7 +724,6 @@ class BaseGTBackend(gt_backend.BasePyExtBackend, gt_backend.CLIBackendMixin):
         "disable_code_generation": {"versioning": False, "type": bool},
         "oir_pipeline": {"versioning": True, "type": OirPipeline},
         "verbose": {"versioning": False, "type": bool},
-        "oir_pipeline": {"versioning": True, "type": OirPipeline},
     }
 
     GT_BACKEND_T: str

@@ -47,7 +47,6 @@ class GTCCudaExtGenerator:
         self.backend = backend
 
     def __call__(self, definition_ir) -> Dict[str, Dict[str, str]]:
-        default_pipeline = DefaultPipeline(skip=[NoFieldAccessPruning])
         gtir = GtirPipeline(DefIRToGTIR.apply(definition_ir)).full()
         base_oir = gtir_to_oir.GTIRToOIR().visit(gtir)
         oir_pipeline = self.backend.builder.options.backend_opts.get(

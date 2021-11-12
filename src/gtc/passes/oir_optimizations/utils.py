@@ -16,12 +16,12 @@
 
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Generic, List, Optional, Set, Tuple, TypeVar, cast
+from typing import Any, Callable, Dict, Generic, List, Optional, Set, Tuple, TypeVar
 
 from eve import NodeVisitor
 from eve.concepts import TreeNode
 from eve.utils import XIterable, xiter
-from gtc import common, oir
+from gtc import oir
 
 
 OffsetT = TypeVar("OffsetT")

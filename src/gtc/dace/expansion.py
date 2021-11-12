@@ -255,7 +255,9 @@ class TaskletCodegen(codegen.TemplatedGenerator):
                 return oir.Cast(dtype=node.dtype, expr=node)
 
     class RemoveForLoopIteratorScalar(eve.NodeTranslator):
-        """Dace transpiling from py to cpp/cuda uses `auto`
+        """Remove for loop iterator scalar.
+
+        Dace transpiling from py to cpp/cuda uses `auto`
         as the type for the iterator IF it hasn't been defined before in cpp/cuda.
         Since the sequential For loop of GT4Py are suppose to _not_ reuse
         the iterator anywhere we strip it's definition from the LocalScalar of
@@ -721,9 +723,7 @@ class BlockVerticalLoopExpander(NaiveVerticalLoopExpander):
     default_tile_sizes = (64, 8)
 
     def get_tiled_subset_strs(self, nsdfg, iteration_space):
-        iter_bounds = (iteration_space.i_interval.start, iteration_space.j_interval.start)
         tile_sizes = self.node.tile_sizes or self.default_tile_sizes
-        names = {*nsdfg.in_connectors, *nsdfg.out_connectors}
 
         # collect inner subsets
         inner_subsets: Dict[str, dace.subsets.Subset] = dict()

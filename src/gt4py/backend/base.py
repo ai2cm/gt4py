@@ -328,10 +328,6 @@ class BaseBackend(Backend):
         source = self.MODULE_GENERATOR_CLASS()(args_data, self.builder, **kwargs)
         return source
 
-    @property
-    def file_name(self) -> str:
-        return str(self.builder.module_path)
-
 
 class PurePythonBackendCLIMixin(CLIBackendMixin):
     """Mixin for CLI support for backends deriving from BaseBackend."""
