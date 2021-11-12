@@ -509,6 +509,7 @@ class NpirGen(TemplatedGenerator):
     ) -> Union[str, Collection[str]]:
         signature = ["*", *node.params, "_domain_", "_origin_"]
         field_extents, block_extents = ExtentCalculator().visit(node)
+        numpy_name = kwargs.pop("numpy_name", "numpy")
         return self.generic_visit(
             node,
             signature=", ".join(signature),
@@ -516,13 +517,14 @@ class NpirGen(TemplatedGenerator):
             var_offset_func=VARIABLE_OFFSET_FUNCTION,
             field_extents=field_extents,
             block_extents=block_extents,
+            numpy_name=numpy_name,
             **kwargs,
         )
 
     Computation = JinjaTemplate(
         textwrap.dedent(
             """\
-            import numpy as np
+            import {{ numpy_name }} as np
             import numbers
 
             def run({{ signature }}):
