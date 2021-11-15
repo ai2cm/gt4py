@@ -18,6 +18,7 @@
 
     - stencil_unique_name: str
     - module_name: str
+    - numpy_name: str
     - backend: str
     - arg_fields: [{ "name": str, "dtype": str, "layout_id": int }]
     - parameters: [{ "name": str, "dtype": str }]
@@ -30,8 +31,8 @@ gt_default_origin, gt_options
 
 import time
 
-import numpy as np
-from numpy import dtype
+import {{ numpy_name }} as np
+from {{ numpy_name }} import dtype
 {{ imports }}
 
 from gt4py.stencil_object import AccessKind, Boundary, DomainInfo, FieldInfo, ParameterInfo, StencilObject

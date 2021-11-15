@@ -570,7 +570,7 @@ class NumPyModuleGenerator(BaseModuleGenerator):
         block = gt_text.TextBlock(indent_size=self.TEMPLATE_INDENT_SIZE)
         numpy_ir = NumpyIR.apply(self.builder.implementation_ir)
         self.source_generator(numpy_ir, block)
-        if self.builder.options.backend_opts.get("ignore_np_errstate", True):
+        if self.builder.options.backend_opts.get("ignore_np_errstate", False):
             source = "with np.errstate(divide='ignore', over='ignore', under='ignore', invalid='ignore'):\n"
             source += textwrap.indent(block.text, " " * self.TEMPLATE_INDENT_SIZE)
         else:

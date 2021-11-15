@@ -225,6 +225,7 @@ class BaseModuleGenerator(abc.ABC):
             pre_run=self.generate_pre_run(),
             post_run=self.generate_post_run(),
             implementation=self.generate_implementation(),
+            numpy_name=kwargs.get("numpy_name", "numpy"),
         )
         if self.builder.options.as_dict()["format_source"]:
             module_source = gt_utils.text.format_source(
