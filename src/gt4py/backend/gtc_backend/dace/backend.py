@@ -222,6 +222,12 @@ class GTCDaCeExtGenerator:
         for tmp_sdfg in sdfg.all_sdfgs_recursive():
             tmp_sdfg.transformation_hist = []
             tmp_sdfg.orig_sdfg = None
+        sdfg.save(
+            self.backend.builder.module_path.joinpath(
+                os.path.dirname(self.backend.builder.module_path),
+                self.backend.builder.module_name + ".sdfg",
+            )
+        )
 
         sources: Dict[str, Dict[str, str]]
         if not self.backend.builder.options.backend_opts.get("disable_code_generation", False):
@@ -559,7 +565,6 @@ class DaCePyExtModuleGenerator(gt_backend.PyExtModuleGenerator):
         res = super().generate_class_members()
         filepath = self.builder.module_path.joinpath(
             os.path.dirname(self.builder.module_path),
-            self.builder.module_name + "_pyext_BUILD",
             self.builder.module_name + ".sdfg",
         )
         res += """

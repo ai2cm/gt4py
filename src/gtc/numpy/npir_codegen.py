@@ -24,7 +24,7 @@ from eve.visitors import NodeVisitor
 from gt4py.definitions import Extent
 from gtc import common
 from gtc.passes import utils
-from gtc.python import npir
+from gtc.numpy import npir
 
 
 __all__ = ["NpirCodegen"]
