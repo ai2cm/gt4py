@@ -62,7 +62,8 @@ class OIRLibraryNode(ABC, dace.nodes.LibraryNode):
             b64string = json_obj["pickle"]
         else:
             b64string = json_obj["attributes"]["pickle"]
-        return pickle.loads(base64.b64decode(b64string))
+        byte_repr = base64.b64decode(b64string)
+        return pickle.loads(byte_repr)
 
 
 @library.node

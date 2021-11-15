@@ -123,6 +123,13 @@ class BaseOirSDFGBuilder(ABC):
                     collection = self._get_access_collection(node)
                     res._ordered_accesses.extend(collection._ordered_accesses)
             return res
+        elif isinstance(node, list):
+            res = AccessCollector.GeneralAccessCollection([])
+            for n in node:
+                if isinstance(n, (HorizontalExecutionLibraryNode, VerticalLoopLibraryNode)):
+                    collection = self._get_access_collection(n)
+                    res._ordered_accesses.extend(collection._ordered_accesses)
+            return res
         elif isinstance(node, HorizontalExecutionLibraryNode):
             if id(node.oir_node) not in self._access_collection_cache:
                 self._access_collection_cache[id(node.oir_node)] = AccessCollector.apply(

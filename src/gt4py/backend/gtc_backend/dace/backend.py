@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Dict, Optional, Tuple, Type
 
 import dace
 import numpy as np
+from dace.serialize import dumps
 from dace.transformation import strict_transformations
 from dace.transformation.dataflow import MapCollapse
 
@@ -45,8 +46,6 @@ from gtc.dace.utils import array_dimensions, replace_strides
 from gtc.passes.gtir_legacy_extents import compute_legacy_extents
 from gtc.passes.gtir_pipeline import GtirPipeline
 from gtc.passes.oir_optimizations.caches import FillFlushToLocalKCaches
-from gtc.passes.oir_optimizations.inlining import MaskInlining
-from gtc.passes.oir_optimizations.mask_stmt_merging import MaskStmtMerging
 from gtc.passes.oir_pipeline import DefaultPipeline
 
 
@@ -211,7 +210,7 @@ class GTCDaCeExtGenerator:
         base_oir = gtir_to_oir.GTIRToOIR().visit(gtir)
         oir_pipeline = self.backend.builder.options.backend_opts.get(
             "oir_pipeline",
-            DefaultPipeline(skip=[MaskStmtMerging, MaskInlining, FillFlushToLocalKCaches]),
+            DefaultPipeline(skip=[FillFlushToLocalKCaches]),
         )
         oir = oir_pipeline.run(base_oir)
         sdfg = OirSDFGBuilder().visit(oir)
@@ -223,12 +222,6 @@ class GTCDaCeExtGenerator:
         for tmp_sdfg in sdfg.all_sdfgs_recursive():
             tmp_sdfg.transformation_hist = []
             tmp_sdfg.orig_sdfg = None
-        sdfg.save(
-            self.backend.builder.module_path.joinpath(
-                os.path.dirname(self.backend.builder.module_path),
-                self.backend.builder.module_name + ".sdfg",
-            )
-        )
 
         sources: Dict[str, Dict[str, str]]
         if not self.backend.builder.options.backend_opts.get("disable_code_generation", False):
@@ -565,7 +558,9 @@ class DaCePyExtModuleGenerator(gt_backend.PyExtModuleGenerator):
     def generate_class_members(self):
         res = super().generate_class_members()
         filepath = self.builder.module_path.joinpath(
-            os.path.dirname(self.builder.module_path), self.builder.module_name + ".sdfg"
+            os.path.dirname(self.builder.module_path),
+            self.builder.module_name + "_pyext_BUILD",
+            self.builder.module_name + ".sdfg",
         )
         res += """
 _sdfg = None
@@ -586,8 +581,36 @@ def sdfg(self) -> dace.SDFG:
         return res
 
 
+class BaseGTCDaceBackend(BaseGTBackend, CLIBackendMixin):
+    def generate(self) -> Type["StencilObject"]:
+        self.check_options(self.builder.options)
+
+        # Generate the Python binary extension (checking if GridTools sources are installed)
+        if not gt_src_manager.has_gt_sources(2) and not gt_src_manager.install_gt_sources(2):
+            raise RuntimeError("Missing GridTools sources.")
+
+        pyext_module_name: Optional[str]
+        pyext_file_path: Optional[str]
+
+        # TODO(havogt) add bypass if computation has no effect
+        pyext_module_name, pyext_file_path = self.generate_extension()
+
+        # Generate and return the Python wrapper class
+        return self.make_module(
+            pyext_module_name=pyext_module_name,
+            pyext_file_path=pyext_file_path,
+        )
+
+    def generate_extension(self) -> Tuple[str, str]:
+        return self.make_extension(
+            gt_version=2,
+            ir=self.builder.definition_ir,
+            uses_cuda=self.storage_info["device"] == "gpu",
+        )
+
+
 @gt_backend.register
-class GTCDaceBackend(BaseGTBackend, CLIBackendMixin):
+class GTCDaceBackend(BaseGTCDaceBackend):
     """DaCe python backend using gtc."""
 
     name = "gtc:dace"
@@ -607,31 +630,9 @@ class GTCDaceBackend(BaseGTBackend, CLIBackendMixin):
     PYEXT_GENERATOR_CLASS = GTCDaCeExtGenerator  # type: ignore
     USE_LEGACY_TOOLCHAIN = False
 
-    def generate_extension(self) -> Tuple[str, str]:
-        return self.make_extension(gt_version=2, ir=self.builder.definition_ir, uses_cuda=False)
-
-    def generate(self) -> Type["StencilObject"]:
-        self.check_options(self.builder.options)
-
-        # Generate the Python binary extension (checking if GridTools sources are installed)
-        if not gt_src_manager.has_gt_sources(2) and not gt_src_manager.install_gt_sources(2):
-            raise RuntimeError("Missing GridTools sources.")
-
-        pyext_module_name: Optional[str]
-        pyext_file_path: Optional[str]
-
-        # TODO(havogt) add bypass if computation has no effect
-        pyext_module_name, pyext_file_path = self.generate_extension()
-
-        # Generate and return the Python wrapper class
-        return self.make_module(
-            pyext_module_name=pyext_module_name,
-            pyext_file_path=pyext_file_path,
-        )
-
 
 @gt_backend.register
-class GTCDaceGPUBackend(BaseGTBackend, CLIBackendMixin):
+class GTCDaceGPUBackend(BaseGTCDaceBackend):
     """DaCe python backend using gtc."""
 
     name = "gtc:dace:gpu"
@@ -648,25 +649,3 @@ class GTCDaceGPUBackend(BaseGTBackend, CLIBackendMixin):
     PYEXT_GENERATOR_CLASS = GTCDaCeExtGenerator  # type: ignore
     MODULE_GENERATOR_CLASS = GTCUDAPyModuleGenerator
     USE_LEGACY_TOOLCHAIN = False
-
-    def generate_extension(self) -> Tuple[str, str]:
-        return self.make_extension(gt_version=2, ir=self.builder.definition_ir, uses_cuda=True)
-
-    def generate(self) -> Type["StencilObject"]:
-        self.check_options(self.builder.options)
-
-        # Generate the Python binary extension (checking if GridTools sources are installed)
-        if not gt_src_manager.has_gt_sources(2) and not gt_src_manager.install_gt_sources(2):
-            raise RuntimeError("Missing GridTools sources.")
-
-        pyext_module_name: Optional[str]
-        pyext_file_path: Optional[str]
-
-        # TODO(havogt) add bypass if computation has no effect
-        pyext_module_name, pyext_file_path = self.generate_extension()
-
-        # Generate and return the Python wrapper class
-        return self.make_module(
-            pyext_module_name=pyext_module_name,
-            pyext_file_path=pyext_file_path,
-        )

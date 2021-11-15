@@ -18,6 +18,7 @@ import abc
 import functools
 import numbers
 import os
+import pathlib
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, Union
 
@@ -799,8 +800,8 @@ class BaseGTBackend(gt_backend.BasePyExtBackend, gt_backend.CLIBackendMixin):
             ir = self.builder.implementation_ir
         # Generate source
         if not self.builder.options._impl_opts.get("disable-code-generation", False):
-            gt_pyext_sources: Dict[str, Any] = self.make_extension_sources(ir=ir)
-            gt_pyext_sources = {**gt_pyext_sources["computation"], **gt_pyext_sources["bindings"]}
+            gt_pyext_files: Dict[str, Any] = self.make_extension_sources(ir=ir)
+            gt_pyext_sources = {**gt_pyext_files["computation"], **gt_pyext_files["bindings"]}
         else:
             # Pass NOTHING to the self.builder means try to reuse the source code files
             gt_pyext_sources = {
@@ -832,6 +833,13 @@ class BaseGTBackend(gt_backend.BasePyExtBackend, gt_backend.CLIBackendMixin):
         else:
             module_name = str(self.pyext_module_path)
             file_path = ""
+
+        pyext_build_path = pathlib.Path(
+            os.path.relpath(self.pyext_build_dir_path, pathlib.Path.cwd())
+        )
+        for filename, content in gt_pyext_files.get("info", {}).items():
+            with open(pyext_build_path / filename, "w") as handle:
+                handle.write(content)
 
         if build_info is not None:
             build_info["build_time"] = time.perf_counter() - start_time

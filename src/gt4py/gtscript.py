@@ -21,11 +21,8 @@ definitions for the keywords of the DSL.
 """
 
 import collections
-import copy
 import inspect
 import numbers
-import os
-import re
 import types
 from typing import Callable, Dict, Type, Union
 
@@ -36,7 +33,6 @@ import gt4py.backend
 from gt4py import definitions as gt_definitions
 from gt4py.lazy_stencil import LazyStencil
 from gt4py.stencil_builder import StencilBuilder
-from gt4py.utils import shash
 
 
 # GTScript builtins
@@ -384,6 +380,7 @@ def as_sdfg(*args, **kwargs) -> dace.SDFG:
         from gt4py.frontend.gtscript_frontend import GTScriptFrontend
         from gtc import gtir_to_oir
         from gtc.dace.oir_to_dace import OirSDFGBuilder
+        from gtc.gtir_to_oir import GTIRToOIR
         from gtc.passes.gtir_pipeline import GtirPipeline
         from gtc.passes.oir_optimizations.caches import FillFlushToLocalKCaches
         from gtc.passes.oir_optimizations.inlining import MaskInlining
@@ -465,204 +462,6 @@ class SDFGWrapper:
         self.stencil_object = None
         self.filename = None
         self._sdfg = None
-
-    def __sdfg__(self, *args, **kwargs):
-
-        if self.stencil_object is None:
-            stencil_function = kwargs.pop("stencil_function", stencil)
-            self.stencil_object = stencil_function(
-                definition=self.func, backend="gtc:numpy", **self.stencil_kwargs
-            )
-
-            basename = os.path.splitext(self.stencil_object._file_name)[0]
-            self.filename = (
-                basename + "_wrapper_" + str(shash(self.device, self.origin, self.domain)) + ".sdfg"
-            )
-
-        # check if same sdfg already cached in memory
-        if self._sdfg is not None:
-            return copy.deepcopy(self._sdfg)
-        elif self.filename in SDFGWrapper.loaded_compiled_sdfgs:
-            self._sdfg = SDFGWrapper.loaded_compiled_sdfgs[self.filename]
-            return copy.deepcopy(self._sdfg)
-
-        # check if same sdfg already cached on disk
-        if kwargs.get("use_disk_sdfg", False):
-            try:
-                self._sdfg = dace.SDFG.from_file(self.filename)
-                print("reused (__sdfg__):", self.filename)
-                SDFGWrapper.loaded_compiled_sdfgs[self.filename] = self._sdfg
-                return copy.deepcopy(self._sdfg)
-            except FileNotFoundError:
-                pass
-            except Exception:
-                raise
-
-        # otherwise, wrap and save sdfg from scratch
-        inner_sdfg = as_sdfg(backend=self.backend, **(self.stencil_kwargs.get("externals", {})))(
-            self.func
-        )
-        self._sdfg = dace.SDFG("SDFGWrapper_" + inner_sdfg.name)
-        state = self._sdfg.add_state("SDFGWrapper_" + inner_sdfg.name + "_state")
-
-        inputs = set()
-        outputs = set()
-        for inner_state in inner_sdfg.nodes():
-            for node in inner_state.nodes():
-                if (
-                    not isinstance(node, dace.nodes.AccessNode)
-                    or inner_sdfg.arrays[node.data].transient
-                ):
-                    continue
-                if node.access != dace.dtypes.AccessType.WriteOnly:
-                    inputs.add(node.data)
-                if node.access != dace.dtypes.AccessType.ReadOnly:
-                    outputs.add(node.data)
-
-        nsdfg = state.add_nested_sdfg(inner_sdfg, None, inputs, outputs)
-        for name, array in inner_sdfg.arrays.items():
-            if isinstance(array, dace.data.Array) and not array.transient:
-                axes = self.stencil_object.field_info[name].axes
-
-                shape = [f"__{name}_{axis}_size" for axis in axes] + [
-                    str(d) for d in self.stencil_object.field_info[name].data_dims
-                ]
-
-                self._sdfg.add_array(
-                    name,
-                    dtype=array.dtype,
-                    strides=array.strides,
-                    shape=shape,
-                    storage=dace.StorageType.GPU_Global
-                    if self.device == "gpu"
-                    else dace.StorageType.Default,
-                )
-                if isinstance(self.origin, tuple):
-                    origin = [o for a, o in zip("IJK", self.origin) if a in axes]
-                else:
-                    origin = self.origin.get(name, self.origin.get("_all_", None))
-                    if len(origin) == 3:
-                        origin = [o for a, o in zip("IJK", origin) if a in axes]
-
-                subset_strs = [
-                    f"{o - e}:{o - e + s}"
-                    for o, e, s in zip(
-                        origin,
-                        self.stencil_object.field_info[name].boundary.lower_indices,
-                        inner_sdfg.arrays[name].shape,
-                    )
-                ]
-                subset_strs += [f"0:{d}" for d in self.stencil_object.field_info[name].data_dims]
-
-                if name in inputs:
-                    state.add_edge(
-                        state.add_read(name),
-                        None,
-                        nsdfg,
-                        name,
-                        dace.Memlet.simple(name, ",".join(subset_strs)),
-                    )
-                if name in outputs:
-                    state.add_edge(
-                        nsdfg,
-                        name,
-                        state.add_write(name),
-                        None,
-                        dace.Memlet.simple(name, ",".join(subset_strs)),
-                    )
-
-        for symbol in nsdfg.sdfg.free_symbols:
-            if symbol not in self._sdfg.symbols:
-                self._sdfg.add_symbol(symbol, nsdfg.sdfg.symbols[symbol])
-
-        if any(d == 0 for d in self.domain):
-            states = self._sdfg.states()
-            assert len(states) == 1
-            for node in states[0].nodes():
-                state.remove_node(node)
-        ival, jval, kval = self.domain[0], self.domain[1], self.domain[2]
-        for sdfg in self._sdfg.all_sdfgs_recursive():
-            if sdfg.parent_nsdfg_node is not None:
-                symmap = sdfg.parent_nsdfg_node.symbol_mapping
-
-                if "__I" in symmap:
-                    ival = symmap["__I"]
-                    del symmap["__I"]
-                if "__J" in symmap:
-                    jval = symmap["__J"]
-                    del symmap["__J"]
-                if "__K" in symmap:
-                    kval = symmap["__K"]
-                    del symmap["__K"]
-
-            sdfg.replace("__I", ival)
-            if "__I" in sdfg.symbols:
-                sdfg.remove_symbol("__I")
-            sdfg.replace("__J", jval)
-            if "__J" in sdfg.symbols:
-                sdfg.remove_symbol("__J")
-            sdfg.replace("__K", kval)
-            if "__K" in sdfg.symbols:
-                sdfg.remove_symbol("__K")
-
-            for val in ival, jval, kval:
-                sym = dace.symbolic.pystr_to_symbolic(val)
-                for fsym in sym.free_symbols:
-                    if sdfg.parent_nsdfg_node is not None:
-                        sdfg.parent_nsdfg_node.symbol_mapping[str(fsym)] = fsym
-                    if fsym not in sdfg.symbols:
-                        if fsym in sdfg.parent_sdfg.symbols:
-                            sdfg.add_symbol(str(fsym), stype=sdfg.parent_sdfg.symbols[str(fsym)])
-                        else:
-                            sdfg.add_symbol(str(fsym), stype=dace.dtypes.int32)
-
-        for _, name, array in self._sdfg.arrays_recursive():
-            if array.transient:
-                array.lifetime = dace.dtypes.AllocationLifetime.SDFG
-
-        self._sdfg.arg_names = [arg for arg in self.func.__annotations__.keys() if arg != "return"]
-        for arg in self._sdfg.arg_names:
-            if (
-                arg in self.stencil_object.field_info
-                and self.stencil_object.field_info[arg] is None
-            ):
-                shape = tuple(
-                    dace.symbolic.symbol(f"__{arg}_{str(axis)}_size")
-                    for axis in self.func.__annotations__[arg].axes
-                )
-                strides = tuple(
-                    dace.symbolic.symbol(f"__{arg}_{str(axis)}_stride")
-                    for axis in self.func.__annotations__[arg].axes
-                )
-                self._sdfg.add_array(
-                    arg,
-                    shape=shape,
-                    strides=strides,
-                    dtype=dace.typeclass(str(self.func.__annotations__[arg].dtype)),
-                )
-            if (
-                arg in self.stencil_object.parameter_info
-                and self.stencil_object.parameter_info[arg] is None
-            ):
-                self._sdfg.add_symbol(arg, stype=dace.typeclass(self.func.__annotations__[arg]))
-        true_args = [
-            arg
-            for arg in self._sdfg.signature_arglist(with_types=False)
-            if not re.match(f"__.*_._stride", arg) and not re.match(f"__.*_._size", arg)
-        ]
-        assert len(self._sdfg.arg_names) == len(true_args)
-        if kwargs.get("use_disk_sdfg", False):
-            self._sdfg.save(self.filename)
-            print("saved (__sdfg__):", self.filename)
-        SDFGWrapper.loaded_compiled_sdfgs[self.filename] = self._sdfg
-        self._sdfg.validate()
-        return dace.SDFG.from_json(self._sdfg.to_json())
-
-    def __sdfg_signature__(self):
-        return ([arg for arg in self.func.__annotations__.keys() if arg != "return"], [])
-
-    def __sdfg_closure__(self, *args, **kwargs):
-        return {}
 
 
 class AxisIndex:
