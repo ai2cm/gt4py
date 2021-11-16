@@ -442,13 +442,15 @@ class PyExtModuleGenerator(BaseModuleGenerator):
         return super().__call__(args_data, builder, **kwargs)
 
     def _is_not_empty(self) -> bool:
+        if self.builder.options.backend_opts.get("disable_code_generation", False):
+            return False
         if self.builder.backend.USE_LEGACY_TOOLCHAIN:
             return iir_is_not_emtpy(self.builder.implementation_ir)
         return gtir_is_not_emtpy(self.builder.gtir_pipeline)
 
     def generate_imports(self) -> str:
         source = ["from gt4py import utils as gt_utils"]
-        if self._is_not_empty:
+        if self._is_not_empty():
             source.append(
                 textwrap.dedent(
                     f"""
@@ -461,6 +463,8 @@ class PyExtModuleGenerator(BaseModuleGenerator):
         return "\n".join(source)
 
     def _has_effect(self) -> bool:
+        if self.builder.options.backend_opts.get("disable_code_generation", False):
+            return False
         if self.builder.backend.USE_LEGACY_TOOLCHAIN:
             return iir_has_effect(self.builder.implementation_ir)
         return gtir_has_effect(self.builder.gtir_pipeline)
