@@ -222,31 +222,29 @@ class GTCDaCeExtGenerator:
         for tmp_sdfg in sdfg.all_sdfgs_recursive():
             tmp_sdfg.transformation_hist = []
             tmp_sdfg.orig_sdfg = None
-        sdfg.save(
-            self.backend.builder.module_path.joinpath(
-                os.path.dirname(self.backend.builder.module_path),
-                self.backend.builder.module_name + ".sdfg",
-            )
-        )
 
-        sources: Dict[str, Dict[str, str]]
         if not self.backend.builder.options.backend_opts.get("disable_code_generation", False):
             with dace.config.set_temporary("compiler", "cuda", "max_concurrent_streams", value=-1):
-                implementation = DaCeComputationCodegen.apply(gtir, sdfg)
-                implementation = self._post_process_code(implementation)
+                implementation = self._post_process_code(DaCeComputationCodegen.apply(gtir, sdfg))
+
+            computation = {"computation.hpp": implementation}
 
             bindings = DaCeBindingsCodegen.apply(
                 gtir, sdfg, module_name=self.module_name, backend=self.backend
             )
 
             bindings_ext = ".cu" if self.backend.storage_info["device"] == "gpu" else ".cpp"
-            sources = {
-                "computation": {"computation.hpp": implementation},
-                "bindings": {"bindings" + bindings_ext: bindings},
-            }
+            bindings = {"bindings" + bindings_ext: bindings}
         else:
-            sources = {"computation": {}, "bindings": {}}
-        return sources
+            computation = bindings = {}
+
+        return {
+            "computation": computation,
+            "bindings": bindings,
+            "info": {
+                self.backend.builder.module_name + ".sdfg": dumps(sdfg.to_json()),
+            },
+        }
 
     def _post_process_code(self, implementation: str) -> str:
         pattern = "__kp("
@@ -586,6 +584,10 @@ def sdfg(self) -> dace.SDFG:
         return res
 
 
+class DaCeCUDAPyModuleGenerator(DaCePyExtModuleGenerator, GTCUDAPyModuleGenerator):
+    pass
+
+
 class BaseGTCDaceBackend(BaseGTBackend, CLIBackendMixin):
     def generate(self) -> Type["StencilObject"]:
         self.check_options(self.builder.options)
@@ -652,5 +654,5 @@ class GTCDaceGPUBackend(BaseGTCDaceBackend):
     }
     options = {**BaseGTBackend.GT_BACKEND_OPTS, "device_sync": {"versioning": True, "type": bool}}
     PYEXT_GENERATOR_CLASS = GTCDaCeExtGenerator  # type: ignore
-    MODULE_GENERATOR_CLASS = GTCUDAPyModuleGenerator
+    MODULE_GENERATOR_CLASS = DaCeCUDAPyModuleGenerator
     USE_LEGACY_TOOLCHAIN = False

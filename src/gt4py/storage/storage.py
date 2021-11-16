@@ -250,18 +250,11 @@ class Storage(np.ndarray):
         raise NotImplementedError("Concatenation of Storages is not supported")
 
     def __descriptor__(self):
-        if hasattr(self, "_istransient"):
-            return dace.data.Array(
+        return dace.data.Array(
                 shape=self.shape,
                 strides=[s // self.itemsize for s in self.strides],
                 dtype=dace.typeclass(str(self.dtype)),
-                transient=True,
-            )
-        else:
-            return dace.data.Array(
-                shape=self.shape,
-                strides=[s // self.itemsize for s in self.strides],
-                dtype=dace.typeclass(str(self.dtype)),
+                transient=hasattr(self, "_istransient"),
             )
 
 
