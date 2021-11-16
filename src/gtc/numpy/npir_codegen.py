@@ -292,16 +292,28 @@ class NpirCodegen(TemplatedGenerator):
     ) -> Union[str, Collection[str]]:
 
         offset = [node.i_offset, node.j_offset, node.k_offset]
+        domain = list(horiz_rest) + [None] if horiz_rest else [None] * 3
+
         offset_str = ", ".join(
-            self.visit(off, is_serial=is_serial, **kwargs) if off else ":" for off in offset
+            self.visit(off, bounds=bounds, is_serial=is_serial, **kwargs) if off else ":"
+            for off, bounds in zip(offset, domain)
         )
 
         if node.data_index:
             offset_str += ", " + ", ".join(self.visit(x, **kwargs) for x in node.data_index)
 
-        if mask_acc and any(off is None for off in offset):
+        if is_rhs and mask_acc and any(off is None for off in offset):
+            axes_bounds = (
+                compute_axis_bounds(bounds, axis_name, 0)
+                for bounds, axis_name in zip(domain, ("I", "J"))
+            )
             k_size = "1" if is_serial else "K - k"
-            arr_expr = f"np.broadcast_to({node.name}_[{offset_str}], (I - i, J - j, {k_size}))"
+            arr_expr = (
+                ",".join([f"{upper}-{lower}" for lower, upper in axes_bounds]) + f", {k_size}"
+            )
+            if node.data_index:
+                arr_expr += ", " + ", ".join(["1"] * len(node.data_index))
+            arr_expr = f"np.broadcast_to({node.name}_[{offset_str}], ({arr_expr}))"
         else:
             arr_expr = f"{node.name}_[{offset_str}]"
 
