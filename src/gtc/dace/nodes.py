@@ -159,17 +159,18 @@ class VerticalLoopLibraryNode(OIRLibraryNode):
             caches=self.caches,
         )
 
-    def __eq__(self, other):
-        try:
-            assert isinstance(other, VerticalLoopLibraryNode)
-            assert self.loop_order == other.loop_order
-            assert self.caches == other.caches
-            assert len(self.sections) == len(other.sections)
-            for (interval1, he_sdfg1), (interval2, he_sdfg2) in zip(self.sections, other.sections):
-                assert interval1 == interval2
-                assert_sdfg_equal(he_sdfg1, he_sdfg2)
-        except AssertionError:
+    def __eq__(self, other) -> bool:
+        if (
+            not isinstance(other, VerticalLoopLibraryNode)
+            or self.loop_order != other.loop_order
+            or self.caches != other.caches
+            or len(self.sections) != len(other.sections)
+        ):
             return False
+        for (interval1, he_sdfg1), (interval2, he_sdfg2) in zip(self.sections, other.sections):
+            if (interval1 != interval2 or
+                not assert_sdfg_equal(he_sdfg1, he_sdfg2) ):
+                return False
         return True
 
     def __hash__(self):

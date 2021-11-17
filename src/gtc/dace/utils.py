@@ -654,48 +654,50 @@ class IntervalMapping:
         return res
 
 
-def assert_sdfg_equal(sdfg1: dace.SDFG, sdfg2: dace.SDFG):
+def assert_sdfg_equal(sdfg1: dace.SDFG, sdfg2: dace.SDFG) -> bool:
     from gtc.dace.nodes import (
         HorizontalExecutionLibraryNode,
         OIRLibraryNode,
         VerticalLoopLibraryNode,
     )
 
-    def edge_match(edge1, edge2):
+    def edge_match(edge1, edge2) -> bool:
         edge1 = next(iter(edge1.values()))
         edge2 = next(iter(edge2.values()))
-        try:
-            if edge1["src_conn"] is not None:
-                assert edge2["src_conn"] is not None
-                assert edge1["src_conn"] == edge2["src_conn"]
-            else:
-                assert edge2["src_conn"] is None
-            assert edge1["data"] == edge2["data"]
-            assert edge1["data"].data == edge2["data"].data
-        except AssertionError:
+        if edge1["src_conn"] is not None:
+            if edge2["src_conn"] is None or edge1["src_conn"] != edge2["src_conn"]:
+                return False
+        elif edge2["src_conn"] is not None:
             return False
+
+        if edge1["data"] != edge2["data"] or edge1["data"].data != edge2["data"].data:
+            return False
+
         return True
 
-    def node_match(n1, n2):
+    def node_match(n1, n2) -> bool:
         n1 = n1["node"]
         n2 = n2["node"]
-        try:
-            if not isinstance(
-                n1, (dace.nodes.AccessNode, VerticalLoopLibraryNode, HorizontalExecutionLibraryNode)
+        if not isinstance(
+            n1, (dace.nodes.AccessNode, VerticalLoopLibraryNode, HorizontalExecutionLibraryNode)
+        ):
+            raise TypeError
+
+        if isinstance(n1, dace.nodes.AccessNode):
+            if (
+                not isinstance(n2, dace.nodes.AccessNode)
+                or n1.access != n2.access
+                or n1.data != n2.data
             ):
-                raise TypeError
-            if isinstance(n1, dace.nodes.AccessNode):
-                assert isinstance(n2, dace.nodes.AccessNode)
-                assert n1.access == n2.access
-                assert n1.data == n2.data
-            elif isinstance(n1, OIRLibraryNode):
-                assert n1 == n2
-        except AssertionError:
-            return False
+                return False
+        elif isinstance(n1, OIRLibraryNode):
+            if n1 != n2:
+                return False
+
         return True
 
-    assert len(sdfg1.states()) == 1
-    assert len(sdfg2.states()) == 1
+    if len(sdfg1.states()) != 1 or len(sdfg2.states()) != 1:
+        return False
     state1 = sdfg1.states()[0]
     state2 = sdfg2.states()[0]
 
@@ -704,11 +706,17 @@ def assert_sdfg_equal(sdfg1: dace.SDFG, sdfg2: dace.SDFG):
     nx.set_node_attributes(state1.nx, {n: n for n in state1.nx.nodes}, "node")
     nx.set_node_attributes(state2.nx, {n: n for n in state2.nx.nodes}, "node")
 
-    assert nx.is_isomorphic(state1.nx, state2.nx, edge_match=edge_match, node_match=node_match)
+    if not nx.is_isomorphic(state1.nx, state2.nx, edge_match=edge_match, node_match=node_match):
+        return False
 
     for name in sdfg1.arrays.keys():
-        assert isinstance(sdfg1.arrays[name], type(sdfg2.arrays[name]))
-        assert isinstance(sdfg2.arrays[name], type(sdfg1.arrays[name]))
-        assert sdfg1.arrays[name].dtype == sdfg2.arrays[name].dtype
-        assert sdfg1.arrays[name].transient == sdfg2.arrays[name].transient
-        assert sdfg1.arrays[name].shape == sdfg2.arrays[name].shape
+        if (
+            not isinstance(sdfg1.arrays[name], type(sdfg2.arrays[name]))
+            or not isinstance(sdfg2.arrays[name], type(sdfg1.arrays[name]))
+            or sdfg1.arrays[name].dtype != sdfg2.arrays[name].dtype
+            or sdfg1.arrays[name].transient != sdfg2.arrays[name].transient
+            or sdfg1.arrays[name].shape != sdfg2.arrays[name].shape
+        ):
+            return False
+
+    return True
