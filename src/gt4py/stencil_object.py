@@ -240,7 +240,7 @@ class FrozenStencil(SDFGConvertible):
 
         # check if same sdfg already cached on disk
         basename = os.path.splitext(self.stencil_object._file_name)[0]
-        filename = f"{basename}_wrapped.sdfg"
+        filename = f"{basename}_{str(frozen_hash)}.sdfg"
         try:
             _loaded_sdfgs[frozen_hash] = dace.SDFG.from_file(filename)
             return copy.deepcopy(_loaded_sdfgs[frozen_hash])
