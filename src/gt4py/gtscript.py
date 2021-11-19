@@ -344,7 +344,6 @@ def lazy_stencil(
             Defers the generation step until the last moment and allows syntax checking independently.
             Also gives access to a more fine grained generate / build process.
     """
-    from gt4py import frontend
 
     def _decorator(func):
         _set_arg_dtypes(func, dtypes or {})
@@ -369,99 +368,6 @@ def lazy_stencil(
     if definition is None:
         return _decorator
     return _decorator(definition)
-
-
-def as_sdfg(*args, **kwargs) -> dace.SDFG:
-    def _decorator(definition_func):
-
-        from gt4py.backend.gtc_backend.dace.backend import expand_and_wrap_sdfg, to_device
-        from gt4py.backend.gtc_backend.defir_to_gtir import DefIRToGTIR
-        from gt4py.definitions import BuildOptions
-        from gt4py.frontend.gtscript_frontend import GTScriptFrontend
-        from gtc import gtir_to_oir
-        from gtc.dace.oir_to_dace import OirSDFGBuilder
-        from gtc.gtir_to_oir import GTIRToOIR
-        from gtc.passes.gtir_pipeline import GtirPipeline
-        from gtc.passes.oir_optimizations.caches import FillFlushToLocalKCaches
-        from gtc.passes.oir_optimizations.inlining import MaskInlining
-        from gtc.passes.oir_optimizations.mask_stmt_merging import MaskStmtMerging
-        from gtc.passes.oir_pipeline import DefaultPipeline
-
-        default_pipeline = DefaultPipeline(
-            skip=[
-                MaskStmtMerging,
-                MaskInlining,
-                FillFlushToLocalKCaches,
-            ]
-        )
-        oir_pipeline = kwargs.pop("oir_pipeline", default_pipeline)
-
-        definition_ir = GTScriptFrontend.generate(
-            definition_func,
-            externals=kwargs,
-            options=BuildOptions(
-                name=definition_func.__name__,
-                module=inspect.currentframe().f_back.f_globals["__name__"],
-            ),
-        )
-
-        gt_ir = DefIRToGTIR.apply(definition_ir)
-        gt_ir = GtirPipeline(gt_ir).full()
-        base_oir = gtir_to_oir.GTIRToOIR().visit(gt_ir)
-        oir = oir_pipeline.run(base_oir)
-
-        sdfg: dace.SDFG = OirSDFGBuilder().visit(oir)
-        backend = gt4py.backend.from_name(kwargs.get("backend", "gtc:dace"))
-        to_device(sdfg, device=backend.storage_info["device"])
-        sdfg = expand_and_wrap_sdfg(gt_ir, sdfg, layout_map=backend.storage_info["layout_map"])
-
-        return sdfg
-
-    if not kwargs and len(args) == 1:
-        return _decorator(args[0])
-    else:
-        return _decorator
-
-
-class SDFGWrapper:
-
-    loaded_compiled_sdfgs: Dict[str, dace.SDFG] = dict()
-
-    def __init__(
-        self,
-        definition,
-        domain,
-        origin,
-        *,
-        dtypes=None,
-        externals=None,
-        format_source=True,
-        name=None,
-        rebuild=False,
-        **kwargs,
-    ):
-
-        self.func = definition
-
-        self.domain = domain
-        self.origin = origin
-        self.backend = kwargs.get("backend", "gtc:dace")
-        if "backend" in kwargs:
-            del kwargs["backend"]
-        self.device = gt4py.backend.from_name(self.backend).storage_info["device"]
-        self.stencil_kwargs = {
-            **kwargs,
-            **dict(
-                dtypes=dtypes,
-                format_source=format_source,
-                name=name,
-                rebuild=rebuild,
-                externals=externals,
-            ),
-        }
-        self.stencil_object = None
-        self.filename = None
-        self._sdfg = None
 
 
 class AxisIndex:
