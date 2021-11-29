@@ -294,6 +294,10 @@ class NpirCodegen(TemplatedGenerator):
         offset = [node.i_offset, node.j_offset, node.k_offset]
         domain = list(horiz_rest) + [None] if horiz_rest else [None] * 3
 
+        # Prevent duplicate keyword args for nested field slices (variable k-offsets)
+        if kwargs.get("bounds", []) is None:
+            kwargs.pop("bounds")
+
         offset_str = ", ".join(
             self.visit(off, bounds=bounds, is_serial=is_serial, **kwargs) if off else ":"
             for off, bounds in zip(offset, domain)

@@ -187,6 +187,6 @@ class NativeFuncCall(common.NativeFuncCall[Expr], VectorExpression):
     _dtype_propagation = common.native_func_call_dtype_propagation(strict=True)
 
 
-class While(common.Stmt):
+class While(VectorStmt):
     cond: VectorLogic
     body: List[Union[VectorAssign, MaskBlock]]
