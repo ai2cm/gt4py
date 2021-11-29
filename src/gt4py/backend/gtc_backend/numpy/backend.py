@@ -31,6 +31,8 @@ from gtc.numpy.oir_to_npir import OirToNpir
 from gtc.passes.oir_dace_optimizations.horizontal_execution_merging import (
     graph_merge_horizontal_executions,
 )
+from gtc.passes.oir_optimizations.horizontal_execution_merging import OnTheFlyMerging
+from gtc.passes.oir_optimizations.inlining import MaskInlining
 from gtc.passes.oir_optimizations.temporaries import (
     LocalTemporariesToScalars,
     WriteBeforeReadTemporariesToScalars,
@@ -143,6 +145,8 @@ class GTCNumpyBackend(BaseBackend, CLIBackendMixin):
                     graph_merge_horizontal_executions,  # Skipping this one for time reasons...
                     LocalTemporariesToScalars,
                     WriteBeforeReadTemporariesToScalars,
+                    OnTheFlyMerging,
+                    MaskInlining,
                     IJCacheDetection,
                     KCacheDetection,
                     PruneKCacheFills,
