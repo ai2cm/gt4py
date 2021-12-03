@@ -206,12 +206,6 @@ class BaseOirSDFGBuilder(ABC):
     def _add_write_edges(
         self, node, collections: List[Tuple[Interval, AccessCollector.GeneralAccessCollection]]
     ):
-        def has_graph_path(graph, source, target):
-            try:
-                return nx.has_path(graph, source, target)
-            except nx.exception.NodeNotFound:
-                return False
-
         write_accesses = dict()
         for interval, access_collection in collections:
             for name in access_collection.write_fields():
@@ -221,7 +215,7 @@ class BaseOirSDFGBuilder(ABC):
                     and (
                         access_node in self._get_recent_reads(name, interval)
                         or access_node in self._get_recent_writes(name, interval)
-                        or has_graph_path(self._state.nx, access_node, node)
+                        or nx.has_path(self._state.nx, access_node, node)
                     )
                 ):
                     write_accesses[name] = self._get_new_sink(name)
