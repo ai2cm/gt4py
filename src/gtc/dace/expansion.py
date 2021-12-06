@@ -213,15 +213,7 @@ class TaskletCodegen(codegen.TemplatedGenerator):
         return code_as_str
 
     def visit_While(self, node: oir.While, **kwargs):
-        # TODO(eddied): Make this an OIR pass to benefit other backends...
-        body_nodes = []
-        for child in node.body:
-            if isinstance(child, oir.MaskStmt) and node.cond == child.mask:
-                body_nodes.extend(child.body)
-            else:
-                body_nodes.append(child)
-
-        body = self.visit(body_nodes, **kwargs)
+        body = self.visit(node.body, **kwargs)
         cond = self.visit(node.cond, is_target=False, **kwargs)
 
         init = "num_iter = 0"
