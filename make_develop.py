@@ -96,9 +96,7 @@ if __name__ == "__main__":
     # Get final branch name
     final_branch = base_section.get("final", None)
     if not final_branch:
-        exit_failure(
-            '"Base" section is missing "final" branch name', code=ExitCode.NONEXISTANT_KEY
-        )
+        exit_failure('"Base" section is missing "final" branch name', code=ExitCode.NONEXISTANT_KEY)
 
     # Checkout base git object
     base_git_object = get_git_object(base_section, "origin")
@@ -165,4 +163,3 @@ if __name__ == "__main__":
     run_git_cmd("commit", "-m", f"Added {script_in_directory} and {config_in_directory}")
 
     print(f"Now run:\n\t$ cd {directory}\n\t$ git push -f upstream {final_branch}")
-

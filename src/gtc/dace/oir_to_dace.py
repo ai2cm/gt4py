@@ -385,7 +385,11 @@ class BaseOirSDFGBuilder(ABC):
         for n in reversed(nodes):
             builder.add_write_after_read_edges(n)
         res = builder._get_sdfg()
-        res.validate()
+        try:
+            res.validate()
+        except dace.sdfg.validation.InvalidSDFGEdgeError:
+            res.view()
+            raise
         return res
 
 
@@ -461,16 +465,16 @@ class VerticalLoopSectionOirSDFGBuilder(BaseOirSDFGBuilder):
         iteration_space = node.iteration_space
         assert iteration_space is not None
         collection = self._get_access_collection(node)
-        for name in collection.read_fields():
-            access_space = CartesianIJIndexSpace.from_offset(collection.read_offsets()[name].pop())
-            for offset in collection.read_offsets()[name]:
-                access_space = access_space | CartesianIJIndexSpace.from_offset(offset)
-            input_spaces[name] = access_space.compose(iteration_space)
-        for name in collection.write_fields():
-            access_space = CartesianIJIndexSpace.from_offset(collection.write_offsets()[name].pop())
-            for offset in collection.write_offsets()[name]:
-                access_space = access_space | CartesianIJIndexSpace.from_offset(offset)
-            output_spaces[name] = access_space.compose(iteration_space)
+
+        for acc in collection.read_accesses():
+            extended = CartesianIJIndexSpace.from_iteration_space(iteration_space).extended(acc)
+            input_spaces.setdefault(acc.field, extended)
+            input_spaces[acc.field] |= extended
+        for acc in collection.write_accesses():
+            extended = CartesianIJIndexSpace.from_iteration_space(iteration_space).extended(acc)
+            output_spaces.setdefault(acc.field, extended)
+            output_spaces[acc.field] |= extended
+
         return input_spaces, output_spaces
 
 
@@ -580,30 +584,19 @@ class StencilOirSDFGBuilder(BaseOirSDFGBuilder):
                 iteration_space = n.iteration_space
                 assert iteration_space is not None
                 collection = self._get_access_collection(n)
-                for name in collection.read_fields():
-                    access_space = CartesianIJIndexSpace.from_offset(
-                        collection.read_offsets()[name].pop()
+                for acc in collection.read_accesses():
+                    extended = CartesianIJIndexSpace.from_iteration_space(iteration_space).extended(
+                        acc
                     )
-                    for offset in collection.read_offsets()[name]:
-                        access_space = access_space | CartesianIJIndexSpace.from_offset(offset)
-                    if name not in input_spaces:
-                        input_spaces[name] = access_space.compose(iteration_space)
-                    else:
-                        input_spaces[name] = input_spaces[name] | access_space.compose(
-                            iteration_space
-                        )
-                for name in collection.write_fields():
-                    access_space = CartesianIJIndexSpace.from_offset(
-                        collection.write_offsets()[name].pop()
+                    input_spaces.setdefault(acc.field, extended)
+                    input_spaces[acc.field] |= extended
+
+                for acc in collection.write_accesses():
+                    extended = CartesianIJIndexSpace.from_iteration_space(iteration_space).extended(
+                        acc
                     )
-                    for offset in collection.write_offsets()[name]:
-                        access_space = access_space | CartesianIJIndexSpace.from_offset(offset)
-                    if name not in output_spaces:
-                        output_spaces[name] = access_space.compose(iteration_space)
-                    else:
-                        output_spaces[name] = output_spaces[name] | access_space.compose(
-                            iteration_space
-                        )
+                    output_spaces.setdefault(acc.field, extended)
+                    output_spaces[acc.field] |= extended
         return input_spaces, output_spaces
 
     def _get_collection_from_sections(self, sections):

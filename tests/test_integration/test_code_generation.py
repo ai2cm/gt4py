@@ -176,7 +176,7 @@ def test_lower_dimensional_inputs(backend):
             with interval(-1, None):
                 tmp = field_2d[0, 1] + field_1d[0]
 
-        with computation(PARALLEL):
+        with computation(FORWARD):
             with interval(0, 1):
                 field_3d = tmp[1, 0, 0] + field_1d[1]
             with interval(1, None):

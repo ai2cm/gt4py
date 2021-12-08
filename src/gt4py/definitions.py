@@ -601,7 +601,7 @@ class Extent(FrameTuple):
 
             if a[1] is None:
                 right = b[1]
-            elif b[0] is None:
+            elif b[1] is None:
                 right = a[1]
             else:
                 right = right_func(a[1], b[1])

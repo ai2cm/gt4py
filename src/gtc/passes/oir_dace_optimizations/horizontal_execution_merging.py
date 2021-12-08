@@ -86,12 +86,8 @@ def iteration_space_compatible(
 
     if left.iteration_space == right.iteration_space:
         return True
-
-    for conn_name in set(left.out_connectors) | set(right.out_connectors):
-        name = conn_name[len("OUT_") :]
-        if name in api_fields:
-            return False
-    return True
+    # TODO allow more cases where writes and reads to/from API fields are unchanged and extent is not affected
+    return False
 
 
 def unwire_access_node(

@@ -322,6 +322,9 @@ class CartesianOffset(Node):
     def is_zero(self) -> bool:
         return all(x == 0 for x in self.to_dict().values())
 
+    def to_tuple(self) -> Tuple[int, int, int]:
+        return self.i, self.j, self.k
+
 
 class IJExtent(LocNode):
     i: Tuple[int, int]
@@ -373,6 +376,9 @@ class VariableKOffset(GenericNode, Generic[ExprT]):
 
     def to_dict(self) -> Dict[str, Optional[int]]:
         return {"i": 0, "j": 0, "k": None}
+
+    def to_tuple(self) -> Tuple[int, int, Optional[int]]:
+        return self.i, self.j, None
 
     @validator("k")
     def offset_expr_is_int(cls, k: Expr) -> List[Expr]:

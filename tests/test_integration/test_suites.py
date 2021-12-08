@@ -743,6 +743,539 @@ class TestReadOutsideKInterval(gt_testing.StencilTestSuite):
         field_out[:, :, :] = field_in[:, :, 0:-2] + field_in[:, :, 2:]
 
 
+Iend = gtscript.AxisIndex(axis=gtscript.I, index=-1, offset=1)
+Jstart = gtscript.AxisIndex(axis=gtscript.J, index=0, offset=0)
+Jend = gtscript.AxisIndex(axis=gtscript.J, index=-1, offset=1)
+
+
+class TestRegionFullDomain(gt_testing.StencilTestSuite):
+    dtypes = {
+        "field_in": np.float64,
+        "field_out": np.float64,
+    }
+    domain_range = [(4, 4), (4, 4), (4, 4)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "Iend": gt_testing.global_name(singleton=Iend),
+        "Jend": gt_testing.global_name(singleton=Jend),
+        "field_in": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(1, 0), (0, 1), (0, 0)]
+        ),
+        "field_out": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+    }
+
+    def definition(field_in, field_out):
+        with computation(PARALLEL), interval(...):
+            from __externals__ import Iend, Jend
+
+            with horizontal(region[0:Iend, 0:Jend]):
+                field_out = (  # noqa: F841  # Local name is assigned to but never used
+                    field_in[-1, 0, 0] + field_in[0, 1, 0]
+                )
+
+    def validation(field_in, field_out, *, domain, origin):
+        @gtscript.stencil(backend="numpy")
+        def ref_stencil(
+            field_in: gtscript.Field[np.float64], field_out: gtscript.Field[np.float64]
+        ):
+            with computation(PARALLEL), interval(...):
+                field_out = (  # noqa: F841  # Local name is assigned to but never used
+                    field_in[-1, 0, 0] + field_in[0, 1, 0]
+                )
+
+        ref_stencil(field_in, field_out, domain=domain, origin=origin)
+
+
+class TestRegionNoExtendLow(gt_testing.StencilTestSuite):
+    dtypes = {
+        "field_in": np.float64,
+        "field_out": np.float64,
+    }
+    domain_range = [(4, 4), (4, 4), (4, 4)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "Iend": gt_testing.global_name(singleton=Iend),
+        "Jend": gt_testing.global_name(singleton=Jend),
+        "field_in": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+        "field_out": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+    }
+
+    def definition(field_in, field_out):
+        with computation(PARALLEL), interval(...):
+            from __externals__ import Iend, Jend
+
+            with horizontal(region[1:Iend, :]):
+                field_out = field_in[  # noqa: F841  # Local name is assigned to but never used
+                    -1, 0, 0
+                ]
+
+    def validation(field_in, field_out, *, domain, origin):
+        @gtscript.stencil(backend="numpy")
+        def ref_stencil(
+            field_in: gtscript.Field[np.float64], field_out: gtscript.Field[np.float64]
+        ):
+            with computation(PARALLEL), interval(...):
+                field_out = field_in[  # noqa: F841  # Local name is assigned to but never used
+                    -1, 0, 0
+                ]
+
+        domain = (domain[0] - 1, domain[1], domain[2])
+        origin = {k: (orig[0] + 1, orig[1], orig[2]) for k, orig in origin.items()}
+        ref_stencil(field_in, field_out, domain=domain, origin=origin)
+
+
+class TestRegionNoExtendHigh(gt_testing.StencilTestSuite):
+    dtypes = {
+        "field_in": np.float64,
+        "field_out": np.float64,
+    }
+    domain_range = [(4, 4), (4, 4), (4, 4)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "Iend": gt_testing.global_name(singleton=Iend),
+        "Jend": gt_testing.global_name(singleton=Jend),
+        "field_in": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+        "field_out": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+    }
+
+    def definition(field_in, field_out):
+        with computation(PARALLEL), interval(...):
+            from __externals__ import Iend, Jend
+
+            with horizontal(region[:, 0 : Jend - 1]):
+                field_out = field_in[  # noqa: F841  # Local name is assigned to but never used
+                    0, 1, 0
+                ]
+
+    def validation(field_in, field_out, *, domain, origin):
+        @gtscript.stencil(backend="numpy")
+        def ref_stencil(
+            field_in: gtscript.Field[np.float64], field_out: gtscript.Field[np.float64]
+        ):
+            with computation(PARALLEL), interval(...):
+                field_out = field_in[  # noqa: F841  # Local name is assigned to but never used
+                    0, 1, 0
+                ]
+
+        domain = (domain[0], domain[1] - 1, domain[2])
+        origin = {k: (orig[0], orig[1], orig[2]) for k, orig in origin.items()}
+        ref_stencil(field_in, field_out, domain=domain, origin=origin)
+
+        # "j_end": AxisIndex(axis=J, index=-1, offset=0),
+
+
+class TestRegionNoExtendHighSingleIdx(gt_testing.StencilTestSuite):
+    dtypes = {
+        "field_in": np.float64,
+        "field_out": np.float64,
+    }
+    domain_range = [(4, 4), (4, 4), (4, 4)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "Iend": gt_testing.global_name(singleton=Iend),
+        "Jend": gt_testing.global_name(singleton=Jend),
+        "field_in": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+        "field_out": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+    }
+
+    def definition(field_in, field_out):
+        with computation(PARALLEL), interval(...):
+            from __externals__ import Iend, Jend
+
+            with horizontal(region[:, Jend - 2]):
+                field_out = field_in[  # noqa: F841  # Local name is assigned to but never used
+                    0, 1, 0
+                ]
+
+    def validation(field_in, field_out, *, domain, origin):
+        field_out[:, -2, :] = field_in[:, -1, :]
+
+
+class TestRegionReadInsideLow(gt_testing.StencilTestSuite):
+    dtypes = {
+        "field_in": np.float64,
+        "field_out": np.float64,
+    }
+    domain_range = [(4, 4), (4, 4), (4, 4)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "Iend": gt_testing.global_name(singleton=Iend),
+        "Jend": gt_testing.global_name(singleton=Jend),
+        "field_in": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+        "field_out": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+    }
+
+    def definition(field_in, field_out):
+        with computation(PARALLEL), interval(...):
+            from __externals__ import Iend, Jend
+
+            with horizontal(region[:, Jend - 1]):
+                field_out = field_in[  # noqa: F841  # Local name is assigned to but never used
+                    0, -1, 0
+                ]
+
+    def validation(field_in, field_out, *, domain, origin):
+        field_out[:, -1, :] = field_in[:, -2, :]
+
+
+class TestRegionExtendHighRange(gt_testing.StencilTestSuite):
+    dtypes = {
+        "field_in": np.float64,
+        "field_out": np.float64,
+    }
+    domain_range = [(4, 4), (4, 4), (4, 4)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "Iend": gt_testing.global_name(singleton=Iend),
+        "Jend": gt_testing.global_name(singleton=Jend),
+        "field_in": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+        "field_out": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+    }
+
+    def definition(field_in, field_out):
+        with computation(PARALLEL), interval(...):
+            from __externals__ import Iend, Jend
+
+            with horizontal(region[: Iend - 2, :]):
+                field_out = field_in[1, 0, 0]
+
+    def validation(field_in, field_out, *, domain, origin):
+        field_out[:-2, :, :] = field_in[1:-1, :, :]
+
+
+class TestRegionReadInsideHigh(gt_testing.StencilTestSuite):
+    dtypes = {
+        "field_in": np.float64,
+        "field_out": np.float64,
+    }
+    domain_range = [(4, 4), (4, 4), (4, 4)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "field_in": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+        "field_out": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+    }
+
+    def definition(field_in, field_out):
+        with computation(PARALLEL), interval(...):
+            with horizontal(region[:, :3]):
+                field_out = field_in[0, 1, 0]
+
+    def validation(field_in, field_out, *, domain, origin):
+        field_out[:, :3, :] = field_in[:, 1:4, :]
+
+
+class TestRegionDoubleRegion(gt_testing.StencilTestSuite):
+    dtypes = {
+        "field_in": np.float64,
+        "field_out": np.float64,
+    }
+    domain_range = [(10, 10), (4, 4), (4, 4)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "field_in": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+        "field_out": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+    }
+
+    def definition(field_in, field_out):
+        with computation(PARALLEL), interval(...):
+            with horizontal(region[3, :], region[Iend - 3, :]):
+                field_out = field_in[-1, 0, 0]
+
+    def validation(field_in, field_out, *, domain, origin):
+        field_out[3, :, :] = field_in[2, :, :]
+        field_out[-3, :, :] = field_in[-4, :, :]
+
+
+class TestRegionDoubleRegionInside(gt_testing.StencilTestSuite):
+
+    dtypes = {
+        "field_in": np.float64,
+        "field_out": np.float64,
+    }
+    domain_range = [(10, 10), (4, 4), (4, 4)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "field_in": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+        "field_out": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+    }
+
+    def definition(field_in, field_out):
+        with computation(PARALLEL), interval(...):
+            with horizontal(region[2, :], region[-2, :]):
+                field_out = field_in[1, 0, 0]
+
+    def validation(field_in, field_out, *, domain, origin):
+        field_out[2, :, :] = field_in[3, :, :]
+        field_out[-2, :, :] = field_in[-1, :, :]
+
+
+class TestRegionBoundsOutsideIterationSpace(gt_testing.StencilTestSuite):
+
+    dtypes = {
+        "field_out": np.float64,
+    }
+    domain_range = [(10, 10), (4, 4), (4, 4)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "field_out": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+    }
+
+    def definition(field_out):
+        with computation(PARALLEL), interval(...):
+            field_out = 7.0
+            with horizontal(region[:, Jstart - 1]):
+                field_out = 1.0
+
+    def validation(field_out, *, domain, origin):
+        field_out[:, :, :] = 7.0
+
+
+class TestRegionBoundsOutsideIterationSpaceWithExtent(gt_testing.StencilTestSuite):
+    dtypes = {
+        "inout_field": np.float64,
+        "out_field": np.float64,
+    }
+    domain_range = [(10, 10), (4, 4), (4, 4)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "inout_field": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (1, 0), (0, 0)]
+        ),
+        "out_field": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+    }
+
+    def definition(inout_field, out_field):
+        with computation(PARALLEL), interval(...):
+            with horizontal(
+                region[:, Jstart - 1],
+            ):
+                inout_field = 7.0
+        with computation(PARALLEL), interval(...):
+            out_field = inout_field[0, -1, 0]
+
+    def validation(inout_field, out_field, *, domain, origin):
+        inout_field[:, 0, :] = 7.0
+        out_field[:, :, :] = inout_field[:, :-1, :]
+
+
+class TestRegionBoundsWeirdExtents(gt_testing.StencilTestSuite):
+    dtypes = {
+        "in_field": np.float64,
+        "out_field": np.float64,
+    }
+    domain_range = [(10, 10), (4, 4), (4, 4)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "in_field": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (1, 0), (0, 0)]
+        ),
+        "out_field": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+    }
+
+    def definition(in_field, out_field):
+        with computation(PARALLEL), interval(...):
+            tmp = 0.0
+            with horizontal(region[5, :]):
+                tmp = in_field
+        with computation(PARALLEL), interval(...):
+            out_field = tmp[0, -1, 0]
+
+    def validation(in_field, out_field, *, domain, origin):
+        # out_field[:, :, :] = 0.0  # inout_field[:, :-1, :]
+        # out_field[5, :, :] = in_field[5, 1:, :]
+        tmp = np.zeros_like(in_field)
+        tmp[5, :, :] = in_field[5, :, :]
+        out_field[:, :, :] = tmp[:, :-1, :]
+
+
+class TestRegionBoundsOutsideIterationSpaceWithExtentHigh(gt_testing.StencilTestSuite):
+    dtypes = {
+        "in_field": np.float64,
+        "inout_field": np.float64,
+        "out_field": np.float64,
+    }
+    domain_range = [(10, 10), (4, 4), (4, 4)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "in_field": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (1, 0), (0, 0)]
+        ),
+        "inout_field": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (1, 0), (0, 0)]
+        ),
+        "out_field": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+    }
+
+    def definition(in_field, inout_field, out_field):
+        with computation(PARALLEL), interval(...):
+            with horizontal(region[Iend - 1, :]):
+                inout_field = in_field[-1, 0, 0]
+
+        with computation(PARALLEL), interval(...):
+            out_field = inout_field[0, -1, 0] - inout_field
+
+    def validation(in_field, inout_field, out_field, *, domain, origin):
+        inout_field[-1, :, :] = in_field[-2, :, :]
+        out_field[:, :, :] = inout_field[:, :-1, :] - inout_field[:, 1:, :]
+
+
+class TestRegionBoundsOutsideIterationSpaceWithExtentLow(gt_testing.StencilTestSuite):
+    dtypes = {
+        "in_field": np.float64,
+        "inout_field": np.float64,
+        "out_field": np.float64,
+    }
+    domain_range = [(1, 1), (3, 3), (1, 1)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "in_field": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(1, 0), (1, 0), (0, 0)]
+        ),
+        "inout_field": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(1, 0), (0, 0), (0, 0)]
+        ),
+        "out_field": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+    }
+
+    def definition(in_field, inout_field, out_field):
+        with computation(PARALLEL), interval(...):
+            inout_field = 0.0
+            with horizontal(region[:, 0]):
+                inout_field = in_field[0, -1, 0]
+        with computation(PARALLEL), interval(...):
+            out_field = inout_field[-1, 0, 0]
+
+    def validation(in_field, inout_field, out_field, *, domain, origin):
+        inout_field[:, :, :] = 0.0
+        inout_field[:, 0, :] = in_field[:, 0, :]
+        out_field[:, :, :] = inout_field[:-1, :, :]
+
+
+class TestRegionTwoStatementsRegionMixedDimsExtend(gt_testing.StencilTestSuite):
+    dtypes = {
+        "in_field": np.float64,
+        "out_field": np.float64,
+    }
+    domain_range = [(3, 3), (3, 3), (3, 3)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "in_field": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (1, 0), (0, 0)]
+        ),
+        "out_field": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+    }
+
+    def definition(in_field, out_field):
+        with computation(PARALLEL), interval(...):
+
+            with horizontal(region[0, :]):
+                tmp = in_field[0, -1, 0]
+                out_field = tmp
+
+    def validation(in_field, out_field, *, domain, origin):
+        out_field[0, :, :] = in_field[0, :-1, :]
+
+
+class TestRegionWithIf(gt_testing.StencilTestSuite):
+    dtypes = {
+        "in_field": np.float64,
+        "out_field": np.float64,
+        "cond": np.float64,
+    }
+    domain_range = [(3, 3), (3, 3), (3, 3)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "in_field": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+        "out_field": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+        "cond": gt_testing.field(in_range=(-10, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]),
+    }
+
+    def definition(in_field, out_field, cond):
+        with computation(PARALLEL), interval(...):
+            with horizontal(region[3:-3, :]):
+                if cond > 0:
+                    out_field = in_field[-1, 0, 0]
+
+    def validation(in_field, out_field, cond, *, domain, origin):
+        out_field[3:-3, :, :] = np.where(
+            cond[3:-3, :, :] > 0, in_field[4:-3, :, :], out_field[3:-3, :, :]
+        )
+
+
+class TestRegionWithIfRegionInside(gt_testing.StencilTestSuite):
+    dtypes = {
+        "out_field": np.float64,
+        "cond": np.float64,
+    }
+    domain_range = [(10, 10), (3, 3), (3, 3)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "out_field": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+        "cond": gt_testing.field(in_range=(-10, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]),
+    }
+
+    def definition(out_field, cond):
+        with computation(PARALLEL), interval(...):
+            if cond > 0:
+                with horizontal(region[3:-2, :]):
+                    out_field = 7.0
+
+    def validation(out_field, cond, *, domain, origin):
+        out_field[3:-2, :, :] = np.where(cond[3:-2, :, :] > 0, 7.0, out_field[3:-2, :, :])
+
+
 class TestVariableKRead(gt_testing.StencilTestSuite):
     dtypes = {
         "field_in": np.float32,

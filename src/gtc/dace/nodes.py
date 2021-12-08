@@ -66,6 +66,7 @@ class OIRLibraryNode(ABC, dace.nodes.LibraryNode):
         return pickle.loads(byte_repr)
 
 
+
 @library.node
 class VerticalLoopLibraryNode(OIRLibraryNode):
     implementations: Dict[str, dace.library.ExpandTransformation] = {}
@@ -192,6 +193,9 @@ class HorizontalExecutionLibraryNode(OIRLibraryNode):
     map_schedule = dace.properties.EnumProperty(
         dtype=dace.ScheduleType, default=dace.ScheduleType.Default
     )
+    index_symbols = dace.properties.ListProperty(element_type=str, default=["i", "j", "0"])
+    global_domain_symbols = dace.properties.ListProperty(element_type=str, default=["__I", "__J"])
+
     _dace_library_name = "oir.HorizontalExecution"
 
     def __init__(

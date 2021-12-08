@@ -16,7 +16,7 @@
 
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Generic, List, Optional, Set, Tuple, TypeVar
+from typing import Any, Callable, Dict, Generic, List, Optional, Set, Tuple, TypeVar, cast
 
 from eve import NodeVisitor
 from eve.concepts import TreeNode
@@ -35,6 +35,7 @@ class GenericAccess(Generic[OffsetT]):
     offset: OffsetT
     is_write: bool
     in_mask: bool = False
+    region: Optional[oir.HorizontalMask] = None
 
     @property
     def is_read(self) -> bool:
@@ -61,15 +62,18 @@ class AccessCollector(NodeVisitor):
         *,
         accesses: List[GeneralAccess],
         is_write: bool,
+        region: oir.HorizontalMask = None,
+        in_mask=False,
         **kwargs: Any,
     ) -> None:
-        offsets = node.offset.to_dict()
+        self.visit(node.offset, accesses=accesses, is_write=False, region=region, in_mask=in_mask)
         accesses.append(
             GeneralAccess(
                 field=node.name,
-                offset=(offsets["i"], offsets["j"], offsets["k"]),
+                offset=node.offset.to_tuple(),
                 is_write=is_write,
-                in_mask=kwargs.get("in_mask", False),
+                in_mask=in_mask,
+                region=region,
             )
         )
 
@@ -82,8 +86,14 @@ class AccessCollector(NodeVisitor):
         self.visit(node.left, is_write=True, **kwargs)
 
     def visit_MaskStmt(self, node: oir.MaskStmt, **kwargs: Any) -> None:
+
         self.visit(node.mask, is_write=False, **kwargs)
-        self.visit(node.body, in_mask=True, **kwargs)
+        regions = node.mask.iter_tree().if_isinstance(oir.HorizontalMask).to_list()
+        if regions:
+            for region in regions:
+                self.visit(node.body, in_mask=True, region=region, **kwargs)
+        else:
+            self.visit(node.body, in_mask=True, region=None, **kwargs)
 
     def visit_While(self, node: oir.While, **kwargs: Any) -> None:
         self.visit(node.cond, is_write=False, **kwargs)
@@ -107,9 +117,17 @@ class AccessCollector(NodeVisitor):
             """Get a dictonary, mapping read fields' names to sets of offset tuples."""
             return self._offset_dict(xiter(self._ordered_accesses).filter(lambda x: x.is_read))
 
+        def read_accesses(self) -> List[AccessT]:
+            """Get the sub-list of read accesses"""
+            return list(xiter(self._ordered_accesses).filter(lambda x: x.is_read))
+
         def write_offsets(self) -> Dict[str, Set[OffsetT]]:
             """Get a dictonary, mapping written fields' names to sets of offset tuples."""
             return self._offset_dict(xiter(self._ordered_accesses).filter(lambda x: x.is_write))
+
+        def write_accesses(self) -> List[AccessT]:
+            """Get the sub-list of write accesses"""
+            return list(xiter(self._ordered_accesses).filter(lambda x: x.is_write))
 
         def fields(self) -> Set[str]:
             """Get a set of all accessed fields' names."""
@@ -138,12 +156,15 @@ class AccessCollector(NodeVisitor):
         def cartesian_accesses(self) -> "AccessCollector.CartesianAccessCollection":
             accesses: List[CartesianAccess] = []
             for acc in self._ordered_accesses:
-                offset = (acc.offset[0], acc.offset[1], 0) if acc.offset[2] is None else acc.offset
                 accesses.append(
                     CartesianAccess(
                         field=acc.field,
-                        offset=offset,
+                        offset=cast(Tuple[int, int, int], acc.offset)
+                        if acc.offset[2] is not None
+                        else (0, 0, 0),
                         is_write=acc.is_write,
+                        region=acc.region,
+                        in_mask=acc.in_mask,
                     )
                 )
             return AccessCollector.CartesianAccessCollection(accesses)
@@ -152,9 +173,54 @@ class AccessCollector(NodeVisitor):
             return any(acc.offset[2] is None for acc in self._ordered_accesses)
 
     @classmethod
-    def apply(cls, node: TreeNode, **kwargs: Any) -> "AccessCollector.GeneralAccessCollection":
+    def _compensate_regions(cls, result: "AccessCollector.GenericAccessCollection"):
+
+        res_accesses = []
+        for acc in result._ordered_accesses:
+            if acc.region is not None:
+                res_offset = []
+                for off, bound in zip(acc.offset, (acc.region.i, acc.region.j)):
+                    bound = common.HorizontalInterval(start=bound.start, end=bound.end)
+                    if off > 0:
+                        if bound.end is None:
+                            pass
+                        elif bound.end.level == common.LevelMarker.END:
+                            off = off + bound.end.offset
+                        else:
+                            off = 0
+                    if off < 0:
+                        if bound.start is None:
+                            pass
+                        elif bound.start.level == common.LevelMarker.START:
+                            off = off + bound.start.offset
+                        else:
+                            off = 0
+                    res_offset.append(off)
+                res_offset.append(acc.offset[2])
+                res_accesses.append(
+                    GeneralAccess(
+                        field=acc.field,
+                        offset=(res_offset[0], res_offset[1], res_offset[2]),
+                        is_write=acc.is_write,
+                        in_mask=acc.in_mask,
+                        region=acc.region,
+                    )
+                )
+            else:
+                res_accesses.append(acc)
+        return AccessCollector.GenericAccessCollection(res_accesses)
+
+    @classmethod
+    def apply(
+        cls, node: TreeNode, *, compensate_regions=False, **kwargs: Any
+    ) -> "AccessCollector.GeneralAccessCollection":
         result = cls.GeneralAccessCollection([])
         cls().visit(node, accesses=result._ordered_accesses, **kwargs)
+
+        if compensate_regions:
+            result = cls._compensate_regions(result)
+            return result
+
         return result
 
 

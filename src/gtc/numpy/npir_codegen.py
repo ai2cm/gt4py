@@ -43,6 +43,13 @@ def op_delta_from_int(value: int) -> Tuple[str, str]:
     return operator, delta
 
 
+def get_axis_bound_str(axis_bound, var_low, var_high):
+    if axis_bound.level == common.LevelMarker.END:
+        return f"{var_high}{axis_bound.offset:+d}"
+    else:
+        return f"{var_low}{axis_bound.offset:+d}"
+
+
 ORIGIN_CORRECTED_VIEW_CLASS = textwrap.dedent(
     """\
     class ShimmedView:
@@ -368,6 +375,28 @@ class NpirCodegen(TemplatedGenerator):
             """
         )
     )
+
+    HorizontalMaskBlock = JinjaTemplate(
+        textwrap.dedent(
+            """\
+                # ---- begin horizontal region --
+                _global_bounds_ = i, I, j, J
+                i, I = {{ mask[0] }}
+                j, J = {{ mask[1] }}
+                {% for stmt in body %}{{ stmt }}
+                {% endfor %}
+                i, I, j, J = _global_bounds_
+                # ---- end horizontal region --
+            """
+        )
+    )
+
+    def visit_HorizontalMask(self, node: npir.HorizontalMask, **kwargs):
+        imin = get_axis_bound_str(node.i.start, "_di_", "_dI_")
+        imax = get_axis_bound_str(node.i.end, "_di_", "_dI_")
+        jmin = get_axis_bound_str(node.j.start, "_dj_", "_dJ_")
+        jmax = get_axis_bound_str(node.j.end, "_dj_", "_dJ_")
+        return f"{imin}, {imax}", f"{jmin}, {jmax}"
 
     def visit_VectorAssign(
         self, node: npir.VectorAssign, **kwargs: Any

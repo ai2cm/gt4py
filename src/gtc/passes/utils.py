@@ -46,8 +46,8 @@ def _overlap_along_axis(
         if interval.start.offset > extent[1]:
             return None
 
-    start_diff = min(start_diff, 0) if start_diff is not None else -10000
-    end_diff = max(end_diff, 0) if end_diff is not None else 10000
+    start_diff = min(start_diff, 0) if start_diff is not None else None
+    end_diff = max(end_diff, 0) if end_diff is not None else None
     return (start_diff, end_diff)
 
 
