@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import dace
 import dace.data
@@ -41,12 +41,16 @@ from gtc.oir import Interval
 from gtc.passes.oir_optimizations.utils import AccessCollector
 
 
+def _zero_if_none(val: Optional[int]) -> int:
+    return val if val is not None else 0
+
+
 def _get_offset_subset_str(origin, offset, dimensions, symbols="ij0"):
     subset_strs = []
     for dim, var in enumerate(symbols):
         if not dimensions[dim]:
             continue
-        off = origin[dim] + offset[dim]
+        off = origin[dim] + _zero_if_none(offset[dim])
         subset_strs.append(f"{var}{off:+d}")
     return subset_strs
 
@@ -70,26 +74,22 @@ class TaskletCodegen(codegen.TemplatedGenerator):
     #         offset_str = ""
     #     return f"{name}{offset_str}"
 
-    def visit_FieldAccess(
-        self,
-        node: oir.FieldAccess,
-        *,
-        is_target: bool,
-        targets: Set[str],
-        origins: Dict[str, Tuple[int, ...]],
-        dimensions: Dict[str, List[bool]],
-        region_fields: Set[str],
-        index_symbols: List[str],
-        **kwargs,
-    ):
+    def visit_FieldAccess(self, node: oir.FieldAccess, **kwargs):
 
-        if (is_target or node.name in targets) and self.visit(node.offset) == "":
+        is_target: bool = kwargs.get("is_target", False)
+        targets: Set[str] = kwargs.get("targets", {})
+        origins: Dict[str, Tuple[int, ...]] = kwargs.get("origins", {})
+        dimensions: Dict[str, List[bool]] = kwargs.get("dimensions", {})
+        region_fields: Set[str] = kwargs.get("region_fields", {})
+        index_symbols: List[str] = kwargs.get("index_symbols", [])
+
+        if (is_target or node.name in targets) and self.visit(node.offset, **kwargs) == "":
             targets.add(node.name)
             name = "__" + node.name
         elif node.name in region_fields:
             name = node.name + "__"
         else:
-            name = node.name + "__" + self.visit(node.offset)
+            name = node.name + "__" + self.visit(node.offset, **kwargs)
 
         if node.name not in region_fields and not node.data_index:
             offset_str = ""
@@ -106,7 +106,7 @@ class TaskletCodegen(codegen.TemplatedGenerator):
                     symbols=index_symbols,
                 )
             if node.data_index:
-                offset_strs += list(self.visit(node.data_index))
+                offset_strs += list(self.visit(node.data_index, **kwargs))
             offset_str = ",".join(offset_strs)
             if offset_str:
                 offset_str = f"[{offset_str}]"
@@ -719,11 +719,14 @@ class NaiveHorizontalExecutionExpander(OIRLibraryNodeExpander):
             else:
                 offset = acc.offset
 
+            k_origin = _zero_if_none(origins[acc.field][2]) if acc.field in origins else 0
+            k_offset = _zero_if_none(offset[2])
+
             origins.setdefault(acc.field, offset)
             origins[acc.field] = (
                 min(origins[acc.field][0], offset[0]),
                 min(origins[acc.field][1], offset[1]),
-                min(origins[acc.field][2], offset[2]),
+                min(k_origin, k_offset),
             )
 
         for name, origin in origins.items():
