@@ -21,6 +21,7 @@ import numpy as np
 from dace.serialize import dumps
 from dace.transformation import strict_transformations
 from dace.transformation.dataflow import MapCollapse
+from dace.transformation.interstate import InlineTransients
 
 import gt4py.definitions
 from eve import NodeVisitor, codegen
@@ -176,6 +177,19 @@ def expand_and_wrap_sdfg(
     for name, info in args_data.parameter_info.items():
         if info is not None and name not in wrapper_sdfg.symbols:
             wrapper_sdfg.add_symbol(name, nsdfg.sdfg.symbols[name])
+
+    for state in wrapper_sdfg.states():
+        for nsdfg in state.nodes():
+            if not isinstance(nsdfg, dace.nodes.NestedSDFG):
+                continue
+            from dace.transformation.interstate import InlineSDFG
+
+            InlineSDFG.apply_to(wrapper_sdfg, _nested_sdfg=nsdfg, save=False)
+
+    wrapper_sdfg.apply_transformations_repeated(
+        [*strict_transformations(), MapCollapse, InlineTransients], strict=True
+    )
+    wrapper_sdfg.validate()
 
     return wrapper_sdfg
 
