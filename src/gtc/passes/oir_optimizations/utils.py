@@ -21,7 +21,7 @@ from typing import Any, Callable, Dict, Generic, List, Optional, Set, Tuple, Typ
 from eve import NodeVisitor
 from eve.concepts import TreeNode
 from eve.utils import XIterable, xiter
-from gtc import oir
+from gtc import common, oir
 
 
 OffsetT = TypeVar("OffsetT")
