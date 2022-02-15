@@ -262,6 +262,7 @@ class Storage(np.ndarray):
             storage=storage,
             total_size=self._raw_buffer.size,
             start_offset=self._alignment_offset,
+            transient=hasattr(self, "_istransient"),
         )
         descriptor.default_origin = self.default_origin
         return descriptor
