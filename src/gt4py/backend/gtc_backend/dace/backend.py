@@ -69,6 +69,12 @@ def specialize_transient_strides(sdfg: dace.SDFG, layout_map):
     for k in repldict.keys():
         if k in sdfg.symbols:
             sdfg.remove_symbol(k)
+    for k, v in repldict.items():
+        if k in sdfg.symbols:
+            sdfg.remove_symbol(k)
+        for sym in getattr(v, "free_symbols", set()):
+            if str(sym) not in sdfg.symbols:
+                sdfg.add_symbol(str(sym), dace.int32)
 
 
 def post_expand_trafos(sdfg: dace.SDFG):
