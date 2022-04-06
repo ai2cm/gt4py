@@ -341,7 +341,7 @@ class TaskletCodegen(codegen.TemplatedGenerator):
         body = [line for block in body for line in block.split("\n")]
         cond = self.visit(node.cond, is_target=False, **kwargs)
         init = "num_iter = 0"
-        max_iter = 80
+        max_iter = 1000
         cond += f" and (num_iter < {max_iter})"
         body.append("num_iter += 1")
         indent = " " * 4
