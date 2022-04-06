@@ -213,16 +213,14 @@ class TaskletCodegen(codegen.TemplatedGenerator):
         node: Union[oir.VariableKOffset, common.CartesianOffset],
         *,
         is_dynamic_offset,
-        field_decl: dcir.FieldDecl,
+        field_decl,
         **kwargs,
     ):
         assert is_dynamic_offset
         offset_strs = []
         for axis in field_decl.axes():
             if axis == dcir.Axis.K:
-                raw_idx = axis.iteration_symbol() + f"+({self.visit(node.k, **kwargs)})"
-                index_str = f"max(0,min({field_decl.access_info.grid_subset.intervals[axis].size},{raw_idx}))"
-                offset_strs.append(index_str)
+                offset_strs.append(axis.iteration_symbol() + f"+({self.visit(node.k, **kwargs)})")
             else:
                 offset_strs.append(axis.iteration_symbol())
         res: dace.subsets.Range = StencilComputationSDFGBuilder._add_origin(
