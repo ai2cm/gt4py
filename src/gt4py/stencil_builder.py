@@ -201,6 +201,10 @@ class StencilBuilder:
             self.frontend.prepare_stencil_definition(self._definition, self.externals),
         )
 
+    def capture_externals(self) -> None:
+        """Extract externals from the annotated stencil definition for fingerprinting. Freezes the references."""
+        self.caching.capture_externals()
+
     @property
     def externals(self) -> Dict[str, Any]:
         return self._build_data.get("externals") or self._build_data.setdefault(
@@ -215,6 +219,7 @@ class StencilBuilder:
         """
         self._build_data = {}
         self._externals = externals
+        self.with_caching(self.caching.name)
         return self
 
     @property
@@ -255,7 +260,10 @@ class StencilBuilder:
     def gtir_pipeline(self) -> GtirPipeline:
         return self._build_data.get("gtir_pipeline") or self._build_data.setdefault(
             "gtir_pipeline",
-            GtirPipeline(self.frontend.generate(self.definition, self.externals, self.options)),
+            GtirPipeline(
+                self.frontend.generate(self.definition, self.externals, self.options),
+                self.stencil_id,
+            ),
         )
 
     @property
