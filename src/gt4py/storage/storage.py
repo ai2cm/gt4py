@@ -284,6 +284,11 @@ class Storage(np.ndarray):
             start_offset = (
                 start_offset % gt_backend.from_name(self.backend).storage_info["alignment"]
             )
+
+            is_transient = False
+            if hasattr(self, "_istransient"):
+                is_transient = self._istransient
+
             descriptor = dace.data.Array(
                 shape=self.shape,
                 strides=[s // self.itemsize for s in self.strides],
@@ -291,6 +296,8 @@ class Storage(np.ndarray):
                 storage=storage,
                 total_size=total_size,
                 start_offset=start_offset,
+                transient=is_transient,
+                pool=is_transient,  # we pool all transients
             )
             descriptor.default_origin = self.default_origin
             return descriptor
