@@ -105,7 +105,17 @@ def _pre_expand_trafos(gtir_pipeline: GtirPipeline, sdfg: dace.SDFG, layout_map)
     for node, _ in filter(
         lambda n: isinstance(n[0], StencilComputation), sdfg.all_nodes_recursive()
     ):
-        if node.oir_node.loop_order == common.LoopOrder.PARALLEL:
+        if node.has_splittable_regions():
+            expansion_priority = [
+                [
+                    "Sections",
+                    "Stages",
+                    "J",
+                    "I",
+                    "K",
+                ]
+            ]
+        elif node.oir_node.loop_order == common.LoopOrder.PARALLEL:
             expansion_priority = []
             expansion_priority.extend(
                 [
@@ -120,7 +130,6 @@ def _pre_expand_trafos(gtir_pipeline: GtirPipeline, sdfg: dace.SDFG, layout_map)
             ]
         is_set = False
         for exp in expansion_priority:
-
             try:
                 node.expansion_specification = exp
                 is_set = True
