@@ -119,14 +119,14 @@ def _pre_expand_trafos(gtir_pipeline: GtirPipeline, sdfg: dace.SDFG, layout_map)
             expansion_priority = []
             expansion_priority.extend(
                 [
-                    ["Sections", "Stages", "K", "J", "I"],
+                    ["Sections", "Stages", "KMap", "J", "I"],
                     ["TileJ", "TileI", "Sections", "KMap", "Stages", "JMap", "IMap"],
                 ]
             )
         else:
             expansion_priority = [
-                ["J", "I", "Sections", "Stages", "K"],
-                ["TileJ", "TileI", "Sections", "KLoop", "Stages", "JMap", "IMap"],
+                ["J", "I", "Sections", "Stages", "CachedKLoop"],
+                ["TileJ", "TileI", "Sections", "CachedKLoop", "Stages", "JMap", "IMap"],
             ]
         is_set = False
         for exp in expansion_priority:
@@ -415,7 +415,7 @@ class DaCeComputationCodegen:
                 const int __J = domain[1];
                 const int __K = domain[2];
                 ${name}_t dace_handle;
-                auto allocator = gt::sid::make_cached_allocator(&${allocator}<char[]>);
+                auto allocator = gt::sid::cached_allocator(&${allocator}<char[]>);
                 ${"\\n".join(tmp_allocs)}
                 __program_${name}(${",".join(["&dace_handle", *dace_args])});
             };
